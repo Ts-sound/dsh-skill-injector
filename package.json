@@ -38,6 +38,11 @@
     "dsh-skill-injector",
     "ai-agent"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ts-sound/dsh-skill-injector.git"
+  },
+  "homepage": "https://github.com/Ts-sound/dsh-skill-injector#readme",
   "engines": {
     "node": ">=20"
   },

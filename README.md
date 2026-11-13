@@ -32,26 +32,26 @@ src/helpers.ts    纯函数（独立构建入口，供单测）：校验、转�
 src/client/index.tsx  浏览器半：5s 轮询 → 设置页 + 侧边栏入口 + 全局面板 + Dock 行
 ```
 
-1. **配置就是插件的 Loader Config**。`src/index.ts` 导出 schemastery 的 `Config`（`mode` / `selected` / `showDock`），Loader 校验后交给 `apply(ctx, config)`。三个字段都是 `.volatile()`：`settings.update(entryId, patch)` 只接受 volatile 字段，Loader 对纯 volatile 变更**原地提交**并触发 `loader/volatile-update`，不重载插件——因此路由、正文缓存、agent scope 在保存后依然存活。
+1. **配置就是插件的 Loader Config**。`src/index.ts` 导出 schemastery 的 `Config`（`mode` / `selected` / `showDock` / `workspaces`），Loader 校验后交给 `apply(ctx, config)`。四个字段都是 `.volatile()`：`settings.update(entryId, patch)` 只接受 volatile 字段，Loader 对纯 volatile 变更**原地提交**并触发 `loader/volatile-update`，不重载插件——因此路由、正文缓存、agent scope 在保存后依然存活。
 2. **读技能必须带 agent scope**。`dsh-skill-filesystem` 注册在 agent preset 层，宿主全局查询为空。插件在 `agent/created` 记住 agent，或从 `ctx.get('agents').list()` 恢复最后一个存活 agent，再用 `{ scope: agent, cwd }` 查询。
 3. **一次解析 = 一次目录快照 + 逐名加载**。`skills.snapshot(options)` 报告发现是否 `complete`；只为目录里出现的名字 `skills.get(...)`；结果经 `classifySelection` 分五态，经 `applyBodies` 合并进 last-good 表。
 4. **并发去重**。同一 selection + scope 的并发解析共享一次飞行中的 pass（`refreshInFlight`）；`passSeq` 保证晚到的 pass 不会覆盖新结果。
 5. **两遍 stamp**。`agent/created` 是串行的、create 完成前会被 await：第一遍用热缓存立即注入，第二遍在（最多 3000ms 的）解析之后补齐冷缓存；靠进程内 `injectedByAgent`（上限 200，超限按最旧驱逐）与会话日志去重，恢复会话不会重复注入。
 6. **`{{` 只转义 section 路径**。section 文本走严格的 `{{variable}}` 插值，所以 `renderActiveSkills` 用 `escapePromptBraces`；`start-only` 的消息不插值，保留原始正文。
 
-快照结构：`{ ok, mode, selected, available, unresolved, injected, canRemove, showDock }`。
+快照结构：`{ ok, mode, selected, effective, truncated, workspaces, activeWorkspaceId, available, unresolved, injected, canRemove, showDock }`。`selected` 是全局列表，`effective` 是当前会话实际注入的合并结果，`workspaces[]` 是各工作区的追加项，`activeWorkspaceId` 是当前会话命中的工作区（无则 `null`）。
 
 ## 🚀 快速开始
 
 ```bash
-# 在本仓库目录先构建（lib/ 不随仓库分发）
+# 从源码安装才需要构建；lib/ 已随仓库提交，普通安装可跳过这一步
 pnpm install && pnpm build
 
 # 安装到 web profile
 dsh plugin --profile web add ./dsh-skill-injector
 ```
 
-安装后重启 DSH，打开 设置 → Skill Injector，勾选技能、选择模式、保存。保存立即生效，不需要重启。
+安装后重启 DSH。入口有三处：设置 → Skill Injector；左侧边栏的 **Skill Injector** 行（打开全局面板）；输入区上方的注入指示行。保存立即生效，不需要重启。
 
 ## ⚙️ 配置
 
@@ -70,7 +70,7 @@ dsh plugin --profile web add ./dsh-skill-injector
 
 ## ❓ 常见问题
 
-**为什么保存后立刻生效？** 三个字段都是 volatile，Loader 原地换值并通知插件重新解析，不重载条目。
+**为什么保存后立刻生效？** 四个字段都是 volatile，Loader 原地换值并通知插件重新解析，不重载条目。
 
 **为什么刚启动时列表是空的？** 还没有任何 agent 提供 scope，所有选中项显示 `no-scope`，`canRemove` 为 false。打开一个会话后自动恢复。
 
@@ -96,17 +96,21 @@ dsh plugin --profile web add ./dsh-skill-injector
 ```
 .
 ├── src/
-│   ├── index.ts           宿主半：Config、解析、两遍注入、路由
+│   ├── index.ts           宿主半：Config、解析、工作区合并、两遍注入、路由
 │   ├── helpers.ts         纯函数与类型（单测直接打这个构建产物）
-│   └── client/index.tsx   浏览器半：设置页 + Dock 行
+│   └── client/index.tsx   浏览器半：设置页 + 侧边栏入口 + 全局面板 + Dock 行
+├── lib/                   构建产物（已提交，安装即用）：index.js / helpers.js / client.js
 ├── tests/
-│   ├── invariants.test.mjs  16 条行为契约（7 helpers + 9 host）
+│   ├── invariants.test.mjs  21 条行为契约（9 helpers + 12 host）
 │   └── fixtures/sample-skill.json
 ├── docs/
+│   ├── assets/            截图等 README 资源
 │   ├── design/README.md   设计文档（术语、契约清单、边界场景）
-│   └── plans/            实施计划
+│   ├── practice-notes/    实践笔记（会话中沉淀的踩坑与做法）
+│   └── plans/             实施计划
 ├── cordis.patch.yml       dsh.bundle 挂载行
 ├── tsdown.config.ts       三个构建入口（host / helpers / client）
+├── AGENTS.md              AI agent 指南（load-bearing 行为与约定）
 └── package.json
 ```
 
