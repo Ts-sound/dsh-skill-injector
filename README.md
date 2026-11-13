@@ -38,11 +38,11 @@ src/client/index.tsx  浏览器半：5s 轮询 → 设置页 + Dock 行
 ## 🚀 快速开始
 
 ```bash
-# 安装到 web profile（在本仓库目录执行）
-dsh plugin --profile web add ./dsh-skill-injector
-
-# 从构建产物安装也可以：先构建
+# 在本仓库目录先构建（lib/ 不随仓库分发）
 pnpm install && pnpm build
+
+# 安装到 web profile
+dsh plugin --profile web add ./dsh-skill-injector
 ```
 
 安装后重启 DSH，打开 设置 → Skill Injector，勾选技能、选择模式、保存。保存立即生效，不需要重启。
