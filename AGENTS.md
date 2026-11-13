@@ -46,7 +46,7 @@
 
 ## 常见任务
 
-- **改分组规则**：`src/client/index.tsx` 的 `skillDirectory()` —— 取 `SKILL.md` 路径里最近一个 `skills` 段之后的相对目录，`/` 显示成 ` / `；无路径或根下技能归 `Other`。宿主只在 `available[]` 里透传 `path`（`SkillSummary.path` 可选）。分组默认折叠，展开状态是 `SettingsPanel` 内的 `openGroups` state，不持久化；组头显示 `已选/总数`（`dsi-group-title` 是按钮）。
+- **改分组规则**：`src/client/index.tsx` 的 `scopeOf()`（`source` → 全局空间/项目工具/其他，`project-*` 归项目）与 `skillDirectory()`（取 `SKILL.md` 路径里最近一个 `skills` 段之后的相对目录，`/` 显示成 ` / `；无路径或根下技能归 `Other`）。宿主在 `available[]` 里透传 `path` 与 `source`（`SkillSummary.path` / `SkillSummary.source`，都可选）。两层默认折叠，展开状态是 `SettingsPanel` 内的 `openGroups` state（键 `section:<scope>`、`group:<scope>::<label>`），不持久化；标题右侧显示 `已选/总数`。
 - **改轮询间隔**：`POLL_MS = 5000`（`src/client/index.tsx`）。
 - **加配置字段**：`Config` 里加 `.volatile()` → `config()` 读取 → 客户端表单 → `tests/invariants.test.mjs` 的契约 8。
 - **加注入模式**：`Config.mode` union + `helpers.ts` 的 `MODES` + 宿主分支 + 客户端 radio + 契约测试。

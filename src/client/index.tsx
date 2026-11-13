@@ -44,21 +44,40 @@ function skillDirectory(path: string | undefined): string {
   return rel === '' ? 'Other' : rel.split('/').join(' / ')
 }
 
+/** Top-level split of the catalog: global roots, project roots, everything else. */
+type SkillScope = '全局空间' | '项目工具' | '其他'
+
+const SCOPE_ORDER: SkillScope[] = ['全局空间', '项目工具', '其他']
+
+function scopeOf(source: string | undefined): SkillScope {
+  if (source === 'project-dsh' || source === 'project-agents') return '项目工具'
+  if (source === undefined) return '其他'
+  return '全局空间'
+}
+
 /** Stable display order: alphabetical, with ungrouped rows last. */
-function groupAvailable(available: AvailableSkill[]): Array<{ label: string; skills: AvailableSkill[] }> {
-  const groups = new Map<string, AvailableSkill[]>()
+function groupAvailable(
+  available: AvailableSkill[],
+): Array<{ scope: SkillScope; groups: Array<{ label: string; skills: AvailableSkill[] }> }> {
+  const byName = (a: AvailableSkill, b: AvailableSkill): number => a.name.localeCompare(b.name)
+  const scopes = new Map<SkillScope, Map<string, AvailableSkill[]>>()
   for (const skill of available) {
+    const scope = scopeOf(skill.source)
     const label = skillDirectory(skill.path)
+    const groups = scopes.get(scope) ?? new Map<string, AvailableSkill[]>()
     const bucket = groups.get(label)
     if (bucket === undefined) groups.set(label, [skill])
     else bucket.push(skill)
+    scopes.set(scope, groups)
   }
-  const byName = (a: AvailableSkill, b: AvailableSkill): number => a.name.localeCompare(b.name)
-  return [...groups.entries()]
-    .map(([label, skills]) => ({ label, skills: skills.sort(byName) }))
-    .sort((a, b) =>
-      a.label === 'Other' ? (b.label === 'Other' ? 0 : 1) : b.label === 'Other' ? -1 : a.label.localeCompare(b.label),
-    )
+  return SCOPE_ORDER.filter((scope) => scopes.has(scope)).map((scope) => ({
+    scope,
+    groups: [...(scopes.get(scope) ?? new Map<string, AvailableSkill[]>()).entries()]
+      .map(([label, skills]) => ({ label, skills: skills.sort(byName) }))
+      .sort((a, b) =>
+        a.label === 'Other' ? (b.label === 'Other' ? 0 : 1) : b.label === 'Other' ? -1 : a.label.localeCompare(b.label),
+      ),
+  }))
 }
 
 interface AvailableSkill {
@@ -66,6 +85,8 @@ interface AvailableSkill {
   description: string
   /** Absolute SKILL.md path when the provider supplies one; used only for grouping. */
   path?: string
+  /** Discovery source (`project-dsh`, `user-agents`, …); splits global from project skills. */
+  source?: string
 }
 
 /** One selected skill the host could not inject. `cached` means the last
@@ -124,8 +145,12 @@ export function apply(ctx: Context): void {
     '.dsi-sub{font-size:12px;opacity:.55}',
     '.dsi-lead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;opacity:.7}',
     '.dsi-lead a{color:inherit;text-decoration:underline}',
+    '.dsi-section{display:flex;flex-direction:column;gap:4px}',
+    '.dsi-section-title{display:flex;align-items:center;gap:7px;width:100%;padding:8px 0;margin:0;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font-size:15px;font-weight:700;letter-spacing:.01em;opacity:.92}',
+    '.dsi-section-title:hover{opacity:1}',
+    '.dsi-section-body{display:flex;flex-direction:column;gap:10px;padding:2px 0 6px 12px;border-left:1px solid var(--dsw-alias-border-l1)}',
     '.dsi-group{display:flex;flex-direction:column;gap:6px}',
-    '.dsi-group-title{display:flex;align-items:center;gap:6px;width:100%;padding:6px 0;margin:0;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.02em;opacity:.75}',
+    '.dsi-group-title{display:flex;align-items:center;gap:6px;width:100%;padding:4px 0;margin:0;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font-size:13px;font-weight:600;letter-spacing:.02em;opacity:.8}',
     '.dsi-group-title:hover{opacity:1}',
     '.dsi-caret{display:inline-block;width:10px;font-size:10px;opacity:.8}',
     '.dsi-group-count{margin-left:auto;font-weight:400;opacity:.6;font-variant-numeric:tabular-nums}',
@@ -232,7 +257,8 @@ export function apply(ctx: Context): void {
     const [checking, setChecking] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const [saved, setSaved] = React.useState(false)
-    // Groups start collapsed; state is per panel instance and keyed by label.
+    // Sections and their directory groups start collapsed; state is per panel
+    // instance, keyed by `section:<scope>` and `group:<scope>::<label>`.
     const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>({})
 
     // Keep local state in sync when a poll brings a newer selection.
@@ -290,8 +316,8 @@ export function apply(ctx: Context): void {
     if (snap === null) return h('div', { className: 'dsi-note' }, 'Loading skills…')
     if (!snap.ok) return h('div', { className: 'dsi-note dsi-error' }, 'Skill Injector unavailable: ' + String(snap.error))
 
-    function toggleGroup(label: string): void {
-      setOpenGroups((prev) => ({ ...prev, [label]: prev[label] !== true }))
+    function toggleOpen(key: string): void {
+      setOpenGroups((prev) => ({ ...prev, [key]: prev[key] !== true }))
     }
 
     return h(
@@ -303,40 +329,71 @@ export function apply(ctx: Context): void {
       h(
         'div',
         null,
-        groupAvailable(snap.available).map((group) => {
-          const open = openGroups[group.label] === true
-          const picked = group.skills.filter((skill) => selected.includes(skill.name)).length
+        groupAvailable(snap.available).map((section) => {
+          const sectionOpen = openGroups['section:' + section.scope] === true
+          const sectionTotal = section.groups.reduce((n, group) => n + group.skills.length, 0)
+          const sectionPicked = section.groups.reduce(
+            (n, group) => n + group.skills.filter((skill) => selected.includes(skill.name)).length,
+            0,
+          )
           return h(
             'div',
-            { key: group.label, className: 'dsi-group' },
+            { key: section.scope, className: 'dsi-section' },
             h(
               'button',
-              { type: 'button', className: 'dsi-group-title', 'aria-expanded': open, onClick: () => toggleGroup(group.label) },
-              h('span', { className: 'dsi-caret' }, open ? '\u25be' : '\u25b8'),
-              h('span', null, group.label),
-              h('span', { className: 'dsi-group-count' }, (picked > 0 ? picked + '/' : '') + group.skills.length),
+              {
+                type: 'button',
+                className: 'dsi-section-title',
+                'aria-expanded': sectionOpen,
+                onClick: () => toggleOpen('section:' + section.scope),
+              },
+              h('span', { className: 'dsi-caret' }, sectionOpen ? '\u25be' : '\u25b8'),
+              h('span', null, section.scope),
+              h('span', { className: 'dsi-group-count' }, (sectionPicked > 0 ? sectionPicked + '/' : '') + sectionTotal),
             ),
-            open
+            sectionOpen
               ? h(
                   'div',
-                  { className: 'dsi-list' },
-                  group.skills.map((skill) =>
-                    h(
-                      'label',
-                      { key: skill.name, className: 'dsi-item' },
-                      h('input', {
-                        type: 'checkbox',
-                        checked: selected.includes(skill.name),
-                        onChange: (e: React.ChangeEvent<HTMLInputElement>) => toggle(skill.name, e.target.checked),
-                      }),
+                  { className: 'dsi-section-body' },
+                  section.groups.map((group) => {
+                    const key = 'group:' + section.scope + '::' + group.label
+                    const open = openGroups[key] === true
+                    const picked = group.skills.filter((skill) => selected.includes(skill.name)).length
+                    return h(
+                      'div',
+                      { key: group.label, className: 'dsi-group' },
                       h(
-                        'div',
-                        null,
-                        h('div', { className: 'dsi-item-name' }, skill.name),
-                        h('div', { className: 'dsi-item-desc' }, skill.description),
+                        'button',
+                        { type: 'button', className: 'dsi-group-title', 'aria-expanded': open, onClick: () => toggleOpen(key) },
+                        h('span', { className: 'dsi-caret' }, open ? '\u25be' : '\u25b8'),
+                        h('span', null, group.label),
+                        h('span', { className: 'dsi-group-count' }, (picked > 0 ? picked + '/' : '') + group.skills.length),
                       ),
-                    ),
-                  ),
+                      open
+                        ? h(
+                            'div',
+                            { className: 'dsi-list' },
+                            group.skills.map((skill) =>
+                              h(
+                                'label',
+                                { key: skill.name, className: 'dsi-item' },
+                                h('input', {
+                                  type: 'checkbox',
+                                  checked: selected.includes(skill.name),
+                                  onChange: (e: React.ChangeEvent<HTMLInputElement>) => toggle(skill.name, e.target.checked),
+                                }),
+                                h(
+                                  'div',
+                                  null,
+                                  h('div', { className: 'dsi-item-name' }, skill.name),
+                                  h('div', { className: 'dsi-item-desc' }, skill.description),
+                                ),
+                              ),
+                            ),
+                          )
+                        : null,
+                    )
+                  }),
                 )
               : null,
           )

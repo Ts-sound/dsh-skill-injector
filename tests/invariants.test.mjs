@@ -586,7 +586,7 @@ test('contract 13: canRemove stays false until a scoped resolve has run', async 
   await h.emit('agent/created', { agent: makeAgent('s1', []), source: 'new' })
   const scoped = await snapshot(h.routes)
   assert.equal(scoped.canRemove, true)
-  assert.deepEqual(scoped.available, [{ name: 'ponytail', description: 'lazy senior dev' }])
+  assert.deepEqual(scoped.available, [{ name: 'ponytail', description: 'lazy senior dev', source: 'user-agents' }])
   assert.deepEqual(scoped.unresolved, [])
 })
 
@@ -602,7 +602,7 @@ test('contract 14: a live agent supplies the scope after re-apply; disposal clea
 
   const recovered = await snapshot(h.routes)
   assert.equal(recovered.canRemove, true)
-  assert.deepEqual(recovered.available, [{ name: 'ponytail', description: 'lazy senior dev' }])
+  assert.deepEqual(recovered.available, [{ name: 'ponytail', description: 'lazy senior dev', source: 'user-agents' }])
   assert.deepEqual(recovered.unresolved, [])
 
   // A disposed agent must stop being the scope: the plugin reverts to the
