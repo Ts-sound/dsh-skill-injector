@@ -125,7 +125,10 @@ export function apply(ctx: Context): void {
     '.dsi-lead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;opacity:.7}',
     '.dsi-lead a{color:inherit;text-decoration:underline}',
     '.dsi-group{display:flex;flex-direction:column;gap:6px}',
-    '.dsi-group-title{font-size:12px;font-weight:600;letter-spacing:.02em;opacity:.75}',
+    '.dsi-group-title{display:flex;align-items:center;gap:6px;width:100%;padding:6px 0;margin:0;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.02em;opacity:.75}',
+    '.dsi-group-title:hover{opacity:1}',
+    '.dsi-caret{display:inline-block;width:10px;font-size:10px;opacity:.8}',
+    '.dsi-group-count{margin-left:auto;font-weight:400;opacity:.6;font-variant-numeric:tabular-nums}',
     '.dsi-list{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none}',
     '.dsi-item{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:8px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1)}',
     '.dsi-item input{margin-top:2px}',
@@ -229,6 +232,8 @@ export function apply(ctx: Context): void {
     const [checking, setChecking] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const [saved, setSaved] = React.useState(false)
+    // Groups start collapsed; state is per panel instance and keyed by label.
+    const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>({})
 
     // Keep local state in sync when a poll brings a newer selection.
     React.useEffect(() => {
@@ -285,6 +290,10 @@ export function apply(ctx: Context): void {
     if (snap === null) return h('div', { className: 'dsi-note' }, 'Loading skills…')
     if (!snap.ok) return h('div', { className: 'dsi-note dsi-error' }, 'Skill Injector unavailable: ' + String(snap.error))
 
+    function toggleGroup(label: string): void {
+      setOpenGroups((prev) => ({ ...prev, [label]: prev[label] !== true }))
+    }
+
     return h(
       'div',
       { className: 'dsi-dash' },
@@ -294,34 +303,44 @@ export function apply(ctx: Context): void {
       h(
         'div',
         null,
-        groupAvailable(snap.available).map((group) =>
-          h(
+        groupAvailable(snap.available).map((group) => {
+          const open = openGroups[group.label] === true
+          const picked = group.skills.filter((skill) => selected.includes(skill.name)).length
+          return h(
             'div',
             { key: group.label, className: 'dsi-group' },
-            h('div', { className: 'dsi-group-title' }, group.label + ' (' + group.skills.length + ')'),
             h(
-              'div',
-              { className: 'dsi-list' },
-              group.skills.map((skill) =>
-                h(
-                  'label',
-                  { key: skill.name, className: 'dsi-item' },
-                  h('input', {
-                    type: 'checkbox',
-                    checked: selected.includes(skill.name),
-                    onChange: (e: React.ChangeEvent<HTMLInputElement>) => toggle(skill.name, e.target.checked),
-                  }),
-                  h(
-                    'div',
-                    null,
-                    h('div', { className: 'dsi-item-name' }, skill.name),
-                    h('div', { className: 'dsi-item-desc' }, skill.description),
-                  ),
-                ),
-              ),
+              'button',
+              { type: 'button', className: 'dsi-group-title', 'aria-expanded': open, onClick: () => toggleGroup(group.label) },
+              h('span', { className: 'dsi-caret' }, open ? '\u25be' : '\u25b8'),
+              h('span', null, group.label),
+              h('span', { className: 'dsi-group-count' }, (picked > 0 ? picked + '/' : '') + group.skills.length),
             ),
-          ),
-        ),
+            open
+              ? h(
+                  'div',
+                  { className: 'dsi-list' },
+                  group.skills.map((skill) =>
+                    h(
+                      'label',
+                      { key: skill.name, className: 'dsi-item' },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: selected.includes(skill.name),
+                        onChange: (e: React.ChangeEvent<HTMLInputElement>) => toggle(skill.name, e.target.checked),
+                      }),
+                      h(
+                        'div',
+                        null,
+                        h('div', { className: 'dsi-item-name' }, skill.name),
+                        h('div', { className: 'dsi-item-desc' }, skill.description),
+                      ),
+                    ),
+                  ),
+                )
+              : null,
+          )
+        }),
       ),
       snap.unresolved.length > 0
         ? h(
