@@ -54,6 +54,7 @@
 - **加配置字段**：`Config` 里加 `.volatile()` → `config()` 读取 → 客户端表单 → `tests/invariants.test.mjs` 的契约 8。
 - **加注入模式**：`Config.mode` union + `helpers.ts` 的 `MODES` + 宿主分支 + 客户端 radio + 契约测试。
 - **重建**：`pnpm install && pnpm build`，再 `pnpm typecheck`。
+- **提交构建产物**：`lib/index.js`、`lib/helpers.js`、`lib/client.js` **进 git**（安装即用，profile 是 Junction，无需构建）。因此改完源码必须 `pnpm build` 后再提交，且源码与 `lib/` 一起进同一次 commit；不生成 source map（`tsdown.config.ts` 里 `sourcemap: false`），`.map` 不进仓库也不进发布包。
 - **更新已安装的 profile**：重建后重启 DSH（宿主半改动需重启；客户端改动按 lib/client.js 哈希重发）。
 
 ## 环境事实（已探明，不要重复探测）
