@@ -53,7 +53,7 @@ graph TD
     S -- PUT /dsh-skill-injector/api/config --> H
   end
   subgraph host[Host 半 lib/index.js DSH 进程]
-    C[Config volatile:<br/>mode/selected/showDock/workspaces] --> F[effectiveFor<br/>selected ∪ workspaces[activeWs]]
+    C[Config volatile:<br/>mode/selected/showDock/workspaces] --> F["effectiveFor<br/>selected ∪ workspaces[activeWs]"]
     F --> R[resolveSelection<br/>snapshot+get 按 scope 分类]
     R --> B[bodies Map last-good]
     B -- each-prompt --> SP[systemPrompt.section<br/>dsh-skill-injector:active]
