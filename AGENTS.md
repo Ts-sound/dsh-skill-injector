@@ -46,6 +46,7 @@
 
 ## 常见任务
 
+- **改分组规则**：`src/client/index.tsx` 的 `skillDirectory()` —— 取 `SKILL.md` 路径里最近一个 `skills` 段之后的相对目录，`/` 显示成 ` / `；无路径或根下技能归 `Other`。宿主只在 `available[]` 里透传 `path`（`SkillSummary.path` 可选）。
 - **改轮询间隔**：`POLL_MS = 5000`（`src/client/index.tsx`）。
 - **加配置字段**：`Config` 里加 `.volatile()` → `config()` 读取 → 客户端表单 → `tests/invariants.test.mjs` 的契约 8。
 - **加注入模式**：`Config.mode` union + `helpers.ts` 的 `MODES` + 宿主分支 + 客户端 radio + 契约测试。

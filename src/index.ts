@@ -98,7 +98,7 @@ interface Snapshot {
   error?: string
   mode: InjectorConfig['mode']
   selected: string[]
-  available: Array<{ name: string; description: string }>
+  available: Array<{ name: string; description: string; path?: string }>
   unresolved: UnresolvedSkill[]
   injected: string[]
   /** True once a scoped resolve has run, so the UI never offers Remove off the boot race. */
@@ -507,11 +507,14 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
   }
 
   async function buildSnapshot(pass: ResolvePass): Promise<Snapshot> {
-    let available: Array<{ name: string; description: string }> = []
+    let available: Array<{ name: string; description: string; path?: string }> = []
     try {
       available = (await skills.list(lookupOptions()))
         .filter(isModelInvocable)
-        .map((s) => ({ name: s.name, description: s.description }))
+        // `path` is provider-optional: virtual skills have none. The client only
+        // uses it to group rows by their on-disk directory, so forwarding it
+        // when present is enough.
+        .map((s) => ({ name: s.name, description: s.description, ...(s.path ? { path: s.path } : {}) }))
     } catch {
       available = []
     }

@@ -24,10 +24,48 @@ const API = '/dsh-skill-injector/api'
 const API_CONFIG = '/dsh-skill-injector/api/config'
 /** Sidebar entry id and the `main` panel key are the same value, by contract. */
 const PANEL_ID = 'dsh-skill-injector'
+const GITHUB_URL = 'https://github.com/Ts-sound/dsh-skill-injector'
+const BLURB = 'Auto-inject the skills you choose into every DSH session.'
+
+/**
+ * Directory label for one catalog row: the path below the nearest `skills`
+ * root. A skill at `<root>/skills/diagram-design/SKILL.md` groups under
+ * `Other`; one at `<root>/skills/skills-tong/engineering/grill-me/SKILL.md`
+ * groups under `skills-tong / engineering`.
+ */
+function skillDirectory(path: string | undefined): string {
+  if (path === undefined) return 'Other'
+  const parts = path.replace(/\\/g, '/').split('/')
+  // Drop `SKILL.md` and the skill's own directory to get its category directory.
+  const dir = parts.slice(0, -2).join('/')
+  const marker = '/skills/'
+  const at = dir.lastIndexOf(marker)
+  const rel = at >= 0 ? dir.slice(at + marker.length) : (dir.split('/').pop() ?? '')
+  return rel === '' ? 'Other' : rel.split('/').join(' / ')
+}
+
+/** Stable display order: alphabetical, with ungrouped rows last. */
+function groupAvailable(available: AvailableSkill[]): Array<{ label: string; skills: AvailableSkill[] }> {
+  const groups = new Map<string, AvailableSkill[]>()
+  for (const skill of available) {
+    const label = skillDirectory(skill.path)
+    const bucket = groups.get(label)
+    if (bucket === undefined) groups.set(label, [skill])
+    else bucket.push(skill)
+  }
+  const byName = (a: AvailableSkill, b: AvailableSkill): number => a.name.localeCompare(b.name)
+  return [...groups.entries()]
+    .map(([label, skills]) => ({ label, skills: skills.sort(byName) }))
+    .sort((a, b) =>
+      a.label === 'Other' ? (b.label === 'Other' ? 0 : 1) : b.label === 'Other' ? -1 : a.label.localeCompare(b.label),
+    )
+}
 
 interface AvailableSkill {
   name: string
   description: string
+  /** Absolute SKILL.md path when the provider supplies one; used only for grouping. */
+  path?: string
 }
 
 /** One selected skill the host could not inject. `cached` means the last
@@ -81,9 +119,13 @@ export function apply(ctx: Context): void {
   const style = document.createElement('style')
   style.dataset.plugin = 'dsh-skill-injector'
   style.textContent = [
-    '.dsi-dash{display:flex;flex-direction:column;gap:14px;padding:8px 0;color:var(--dsw-alias-label-primary)}',
+    '.dsi-dash{display:flex;flex-direction:column;gap:14px;padding:8px 0;width:100%;max-width:720px;margin:0 auto;color:var(--dsw-alias-label-primary)}',
     '.dsi-title{font-size:16px;font-weight:600}',
     '.dsi-sub{font-size:12px;opacity:.55}',
+    '.dsi-lead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;opacity:.7}',
+    '.dsi-lead a{color:inherit;text-decoration:underline}',
+    '.dsi-group{display:flex;flex-direction:column;gap:6px}',
+    '.dsi-group-title{font-size:12px;font-weight:600;letter-spacing:.02em;opacity:.75}',
     '.dsi-list{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none}',
     '.dsi-item{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:8px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1)}',
     '.dsi-item input{margin-top:2px}',
@@ -102,9 +144,9 @@ export function apply(ctx: Context): void {
     '.dsi-dock{font-size:12px;opacity:.65;padding:2px 0;white-space:nowrap}',
     '.dsi-glyph{display:block}',
     '.dsi-page{display:flex;flex-direction:column;gap:12px;padding:20px 24px;height:100%;overflow:auto;color:var(--dsw-alias-label-primary)}',
+    '.dsi-page-inner{display:flex;flex-direction:column;gap:12px;width:100%;max-width:720px;margin:0 auto}',
     '.dsi-page-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
     '.dsi-page-title{font-size:16px;font-weight:600}',
-    '.dsi-page-body{max-width:720px;width:100%}',
   ].join('')
   document.head.appendChild(style)
   ctx.effect(() => () => {
@@ -248,23 +290,35 @@ export function apply(ctx: Context): void {
       { className: 'dsi-dash' },
       bare ? null : h('div', { className: 'dsi-title' }, 'Skill Injector'),
       bare ? null : h('div', { className: 'dsi-sub' }, 'Inject chosen skills into every session. Choose skills and mode, then Save.'),
+      bare ? null : h(Lead),
       h(
         'div',
-        { className: 'dsi-list' },
-        snap.available.map((skill) =>
+        null,
+        groupAvailable(snap.available).map((group) =>
           h(
-            'label',
-            { key: skill.name, className: 'dsi-item' },
-            h('input', {
-              type: 'checkbox',
-              checked: selected.includes(skill.name),
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) => toggle(skill.name, e.target.checked),
-            }),
+            'div',
+            { key: group.label, className: 'dsi-group' },
+            h('div', { className: 'dsi-group-title' }, group.label + ' (' + group.skills.length + ')'),
             h(
               'div',
-              null,
-              h('div', { className: 'dsi-item-name' }, skill.name),
-              h('div', { className: 'dsi-item-desc' }, skill.description),
+              { className: 'dsi-list' },
+              group.skills.map((skill) =>
+                h(
+                  'label',
+                  { key: skill.name, className: 'dsi-item' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: selected.includes(skill.name),
+                    onChange: (e: React.ChangeEvent<HTMLInputElement>) => toggle(skill.name, e.target.checked),
+                  }),
+                  h(
+                    'div',
+                    null,
+                    h('div', { className: 'dsi-item-name' }, skill.name),
+                    h('div', { className: 'dsi-item-desc' }, skill.description),
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -380,6 +434,16 @@ export function apply(ctx: Context): void {
     )
   }
 
+  /** One-line plugin identity: what it does plus the repository link. */
+  function Lead(): React.ReactElement {
+    return React.createElement(
+      'div',
+      { className: 'dsi-lead' },
+      React.createElement('span', null, BLURB),
+      React.createElement('a', { href: GITHUB_URL, target: '_blank', rel: 'noreferrer' }, 'GitHub ↗'),
+    )
+  }
+
   /** Full-page panel opened from the sidebar entry; replaces the conversation area. */
   function SkillsPage(): React.ReactElement {
     const h = React.createElement
@@ -388,18 +452,23 @@ export function apply(ctx: Context): void {
       { className: 'dsi-page' },
       h(
         'div',
-        { className: 'dsi-page-header' },
-        h('div', { className: 'dsi-page-title' }, 'Skill Injector'),
+        { className: 'dsi-page-inner' },
         h(
-          'button',
-          {
-            className: 'dsi-mini',
-            onClick: () => layout?.selectPanel(null),
-          },
-          'Back to conversation',
+          'div',
+          { className: 'dsi-page-header' },
+          h('div', { className: 'dsi-page-title' }, 'Skill Injector'),
+          h(
+            'button',
+            {
+              className: 'dsi-mini',
+              onClick: () => layout?.selectPanel(null),
+            },
+            'Back to conversation',
+          ),
         ),
+        h(Lead),
+        h(SettingsPanel, { bare: true }),
       ),
-      h('div', { className: 'dsi-page-body' }, h(SettingsPanel, { bare: true })),
     )
   }
 

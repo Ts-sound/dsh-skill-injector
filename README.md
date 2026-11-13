@@ -16,7 +16,8 @@
 | 保留 last-good 正文 | 技能文件临时读失败（或发现未完成）时继续注入上一份好正文，只有 `unknown` 会丢弃 |
 | 设置页 | `settings.section` id `dsh-skill-injector`（order 60）：勾选、模式、`showDock`、保存、逐条 Retry / Remove |
 | 左侧边栏入口 | `sidebar.panellist` id `dsh-skill-injector`（order 10）：图标行，点击切到全局面板 |
-| 全局面板 | `main` keyed slot，key `dsh-skill-injector`：复用设置页的选择/模式控件，带「Back to conversation」返回 |
+| 全局面板 | `main` keyed slot，key `dsh-skill-injector`：顶行是简介 + GitHub 链接，下面复用设置页的选择/模式控件，整体居中（max-width 720px），带「Back to conversation」返回 |
+| 按目录分组 | 技能按 `SKILL.md` 所在目录分组（取最近的 `skills` 根之下的相对路径，如 `skills-tong / engineering`；根下的技能与无路径的虚拟技能归入 `Other`），组名后显示条数 |
 | 输入区指示 | `conversation.composer.dock` id `dsh-skill-injector-dock`（order 10）：`Injected Skills: … · Mode: … (· N unresolved)`，可在设置页隐藏 |
 | 重启存续 | 打包插件，`dsh plugin add` 安装一次，每次 DSH 启动自动加载 |
 
