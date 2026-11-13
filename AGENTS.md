@@ -1,6 +1,6 @@
 # AGENTS.md — Guide for AI agents
 
-`dsh-skill-injector` 是一个打包型 **Cordis 插件（DSH 0.2.x）**：把用户选中的技能注入会话——`each-prompt`（每次组装系统提示时由 `systemPrompt.section` 渲染）或 `start-only`（`agent/created` 时 `agent.inject()` 一条去重的 `skill-invocation` 消息）。宿主半声明 Loader **Config**（`mode`/`selected`/`showDock`）、经 `GET /dsh-skill-injector/api` + `PUT /dsh-skill-injector/api/config` 提供快照与写入；客户端半 5s 轮询，渲染 `settings.section` 与 `conversation.composer.dock`。客户端↔宿主只有 **HTTP** 一条缝。
+`dsh-skill-injector` 是一个打包型 **Cordis 插件（DSH 0.2.x）**：把用户选中的技能注入会话——`each-prompt`（每次组装系统提示时由 `systemPrompt.section` 渲染）或 `start-only`（`agent/created` 时 `agent.inject()` 一条去重的 `skill-invocation` 消息）。宿主半声明 Loader **Config**（`mode`/`selected`/`showDock`）、经 `GET /dsh-skill-injector/api` + `PUT /dsh-skill-injector/api/config` 提供快照与写入；客户端半 5s 轮询，渲染 `settings.section`、侧边栏入口 + 全局面板（`sidebar.panellist` + `main` keyed slot）与 `conversation.composer.dock`。客户端↔宿主只有 **HTTP** 一条缝。
 
 目标版本：`@deepseek-ai/dsh-skill` / `dsh-llm` `^0.2.1-rc.5`，`@deepseek-ai/cordis` `^4.0.5`。
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | `src/index.ts` | 宿主半：`Config`（三字段全 `.volatile()`）、`resolveSelection`（目录快照 + 五态分类 + last-good 正文表）、section（order 150）、两遍 `agent/created` stamp、两条路由。 |
 | `src/helpers.ts` | 纯函数（独立构建入口）：`validateSelection`、`escapePromptBraces`、`buildInjectionMessage`、`classifySelection`、`applyBodies`、`cachedSuffix`、`isSkillName`、`MAX_SELECTED`、类型。 |
-| `src/client/index.tsx` | 浏览器半：5s 轮询、设置页 `dsh-skill-injector`（order 60）、Dock 行 `dsh-skill-injector-dock`（order 10）。 |
+| `src/client/index.tsx` | 浏览器半：5s 轮询、设置页 `dsh-skill-injector`（order 60）、侧边栏入口 `sidebar.panellist` + 全局面板 `main`（key 同名）、Dock 行 `dsh-skill-injector-dock`（order 10）。 |
 | `cordis.patch.yml` | `dsh.bundle.patch`：插入 `{id: dsh-skill-injector, name: 'dsh-skill-injector'}`。 |
 | `tsdown.config.ts` | host → `lib/index.js`、helpers → `lib/helpers.js`、client → `lib/client.js`（CJS ModuleLoader 闭包，bundle id = 包名）。 |
 | `tests/invariants.test.mjs` | 16 条行为契约（7 helpers + 9 host），打的是 `lib/` 构建产物。 |
@@ -40,6 +40,7 @@
 | section | `dsh-skill-injector:active`（order 150） |
 | 路由 | `/dsh-skill-injector/api`、`/dsh-skill-injector/api/config` |
 | 设置页 id | `dsh-skill-injector`（order 60） |
+| 侧边栏入口 id / 面板 key | `dsh-skill-injector`（`sidebar.panellist` order 10 + `main` keyed slot，两者必须同名） |
 | Dock id | `dsh-skill-injector-dock`（order 10） |
 | CSS 前缀 | `dsi-` |
 

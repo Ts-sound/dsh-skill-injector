@@ -15,6 +15,8 @@
 | 实时状态 | 每个被选技能五态：`ready` / `unknown` / `unavailable` / `load-failed` / `no-scope`；只有 `unknown` 是终态失败 |
 | 保留 last-good 正文 | 技能文件临时读失败（或发现未完成）时继续注入上一份好正文，只有 `unknown` 会丢弃 |
 | 设置页 | `settings.section` id `dsh-skill-injector`（order 60）：勾选、模式、`showDock`、保存、逐条 Retry / Remove |
+| 左侧边栏入口 | `sidebar.panellist` id `dsh-skill-injector`（order 10）：图标行，点击切到全局面板 |
+| 全局面板 | `main` keyed slot，key `dsh-skill-injector`：复用设置页的选择/模式控件，带「Back to conversation」返回 |
 | 输入区指示 | `conversation.composer.dock` id `dsh-skill-injector-dock`（order 10）：`Injected Skills: … · Mode: … (· N unresolved)`，可在设置页隐藏 |
 | 重启存续 | 打包插件，`dsh plugin add` 安装一次，每次 DSH 启动自动加载 |
 
@@ -23,7 +25,7 @@
 ```
 src/index.ts      宿主半：Config / 解析 / 两遍注入 / HTTP 路由
 src/helpers.ts    纯函数（独立构建入口，供单测）：校验、转义、分类、缓存
-src/client/index.tsx  浏览器半：5s 轮询 → 设置页 + Dock 行
+src/client/index.tsx  浏览器半：5s 轮询 → 设置页 + 侧边栏入口 + 全局面板 + Dock 行
 ```
 
 1. **配置就是插件的 Loader Config**。`src/index.ts` 导出 schemastery 的 `Config`（`mode` / `selected` / `showDock`），Loader 校验后交给 `apply(ctx, config)`。三个字段都是 `.volatile()`：`settings.update(entryId, patch)` 只接受 volatile 字段，Loader 对纯 volatile 变更**原地提交**并触发 `loader/volatile-update`，不重载插件——因此路由、正文缓存、agent scope 在保存后依然存活。
