@@ -2,6 +2,10 @@
 
 `dsh-skill-injector` 是一个打包型 DSH 插件：把用户选中的技能（如 `caveman`、`ponytail`）自动注入每个会话——要么每轮提示都注入（`each-prompt`），要么只在会话开始时注入一次（`start-only`）。自带设置页与输入区指示行，配置写进 profile，重启后依旧生效。
 
+![dsh-plugin](https://img.shields.io/badge/dsh--plugin-ready-4c8dff) ![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-✓-0f1115) ![license](https://img.shields.io/badge/license-MIT-green) ![install](https://img.shields.io/badge/dsh%20plugin%20add-✓-22c55e)
+
+**关键词**：`dsh-plugin` · `deepseek-harness-plugin` · skills · skill-injection · workspaces · sidebar
+
 - 目标版本：DSH **0.2.x**（`@deepseek-ai/dsh-skill` / `dsh-llm` 以 peer 方式声明 `>=0.2.0-rc.1 <0.3.0-0`）
 - 技能正文全部来自运行时 `ctx.skills` 注册表，仓库里不存任何技能副本
 - 客户端与宿主之间只有 HTTP 一条缝（`/dsh-skill-injector/api`），没有 RPC
@@ -123,6 +127,13 @@ node --test --test-isolation=none "tests/**/*.mjs"
 ```
 
 测试跑的是构建产物，所以先 `pnpm build`。受限 shell 下用上面这条 `node --test` 形式（`node --test tests/` 会因 spawn 被拒）。
+
+## 🙏 致谢
+
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) —— DSH 插件/动态运行时、Slots、主题令牌、webServer、client-modules 扫描器。
+- [skill-injector-plugin](https://github.com/Ts-sound/skill-injector-plugin) v1.2.0 —— 本插件的行为原型：volatile Config、scope 查找、两遍 stamp、last-good 正文表与五态分类；本仓库在其基础上换命名空间、精简结构与测试，并新增侧边栏入口、全局面板与按工作区细化。
+- [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) —— 打包式 client-plugin 与 `sidebar.panellist` + `main` keyed slot 的接入参考。
+- [headroom-stats-plugin](https://github.com/Zenjibad/headroom-stats-plugin) —— 打包插件的 manifest、构建与 README 结构参考（徽章、致谢、关键词写法）。
 
 ## 📄 许可证
 
