@@ -104,10 +104,9 @@ dsh plugin --profile web add ./dsh-skill-injector
 │   ├── invariants.test.mjs  21 条行为契约（9 helpers + 12 host）
 │   └── fixtures/sample-skill.json
 ├── docs/
-│   ├── assets/            截图等 README 资源
+│   ├── assets/            截图（README 顶部引用）
 │   ├── design/README.md   设计文档（术语、契约清单、边界场景）
-│   ├── practice-notes/    实践笔记（会话中沉淀的踩坑与做法）
-│   └── plans/             实施计划
+│   └── practice-notes/    实践笔记（会话中沉淀的踩坑与做法）
 ├── cordis.patch.yml       dsh.bundle 挂载行
 ├── tsdown.config.ts       三个构建入口（host / helpers / client）
 ├── AGENTS.md              AI agent 指南（load-bearing 行为与约定）

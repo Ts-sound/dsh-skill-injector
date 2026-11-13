@@ -37,6 +37,9 @@ next-env.d.ts
 
 /temp/
 
+# working plans stay local, not part of the published repo
+/docs/plans/
+
 # dsh-skill-injector build output is committed: installs run against lib/
 # without a build step, so lib/index.js, lib/helpers.js, lib/client.js and
 # are tracked on purpose. Source maps are not built.
