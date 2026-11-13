@@ -103,7 +103,16 @@ interface Snapshot {
   ok: boolean
   error?: string
   mode: 'each-prompt' | 'start-only'
+  /** The GLOBAL selection (what the panel edits under the global target). */
   selected: string[]
+  /** Global + the active workspace's additions: what this session receives. */
+  effective: string[]
+  /** True when the merge hit MAX_SELECTED and some workspace skills were dropped. */
+  truncated: boolean
+  /** Workspaces the panel may target; empty when no registry is mounted. */
+  workspaces: WorkspaceRow[]
+  /** The workspace this session resolves to, or null outside every workspace. */
+  activeWorkspaceId: string | null
   available: AvailableSkill[]
   unresolved: ClassifiedSkill[]
   injected: string[]
@@ -111,6 +120,14 @@ interface Snapshot {
   canRemove: boolean
   /** Omitted by a host that predates the dock toggle; treated as `true`. */
   showDock?: boolean
+}
+
+/** One registry workspace plus the additions stored for it. */
+interface WorkspaceRow {
+  id: string
+  title: string
+  path: string
+  selection: string[]
 }
 
 export function apply(ctx: Context): void {
@@ -146,14 +163,20 @@ export function apply(ctx: Context): void {
     '.dsi-lead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;opacity:.7}',
     '.dsi-lead a{color:inherit;text-decoration:underline}',
     '.dsi-section{display:flex;flex-direction:column;gap:4px}',
-    '.dsi-section-title{display:flex;align-items:center;gap:7px;width:100%;padding:8px 0;margin:0;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font-size:15px;font-weight:700;letter-spacing:.01em;opacity:.92}',
-    '.dsi-section-title:hover{opacity:1}',
+    '.dsi-section-title{display:flex;align-items:center;gap:6px;width:100%;padding:6px 0;margin:0;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font-size:12px;font-weight:600;letter-spacing:.04em;opacity:.6;text-transform:uppercase}',
+    '.dsi-section-title:hover{opacity:.9}',
     '.dsi-section-body{display:flex;flex-direction:column;gap:10px;padding:2px 0 6px 12px;border-left:1px solid var(--dsw-alias-border-l1)}',
     '.dsi-group{display:flex;flex-direction:column;gap:6px}',
-    '.dsi-group-title{display:flex;align-items:center;gap:6px;width:100%;padding:4px 0;margin:0;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font-size:13px;font-weight:600;letter-spacing:.02em;opacity:.8}',
-    '.dsi-group-title:hover{opacity:1}',
-    '.dsi-caret{display:inline-block;width:10px;font-size:10px;opacity:.8}',
-    '.dsi-group-count{margin-left:auto;font-weight:400;opacity:.6;font-variant-numeric:tabular-nums}',
+    '.dsi-group-title{display:flex;align-items:center;gap:7px;width:100%;padding:6px 8px;margin:0 0 0 -8px;background:none;border:0;border-radius:6px;color:inherit;text-align:left;cursor:pointer;font-size:15px;font-weight:650;letter-spacing:.01em;opacity:.92;line-height:1.4}',
+    '.dsi-group-title:hover{opacity:1;background:var(--dsw-alias-bg-layer-1)}',
+    '.dsi-caret{display:inline-block;width:14px;font-size:14px;opacity:.8}',
+    '.dsi-group-count{margin-left:auto;font-size:12px;font-weight:400;opacity:.6;font-variant-numeric:tabular-nums}',
+    '.dsi-target{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px}',
+    '.dsi-target-label{font-size:12px;font-weight:600;opacity:.6;letter-spacing:.04em;text-transform:uppercase}',
+    '.dsi-select{max-width:100%;padding:4px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px}',
+    '.dsi-target-hint{font-size:12px;opacity:.6}',
+    '.dsi-badge{margin-left:6px;padding:0 5px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);font-size:10px;font-weight:500;opacity:.7;letter-spacing:.03em;text-transform:none}',
+    '.dsi-warn{padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warning-primary,#b8860b);background:color-mix(in srgb,var(--dsw-alias-state-warning-primary,#b8860b) 12%,transparent);font-size:12px}',
     '.dsi-list{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none}',
     '.dsi-item{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:8px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1)}',
     '.dsi-item input{margin-top:2px}',
@@ -188,11 +211,27 @@ export function apply(ctx: Context): void {
 
   /** Normalize a host body: this bundle can outlive the host that served it. */
   function normalize(raw: Partial<Snapshot>): Snapshot {
+    const selected = Array.isArray(raw.selected) ? raw.selected : []
     return {
       ok: raw.ok === true,
       error: raw.error,
       mode: raw.mode === 'start-only' ? 'start-only' : 'each-prompt',
-      selected: raw.selected ?? [],
+      selected,
+      // A host that predates workspaces has no `effective`, so the global list
+      // is the truthful fallback.
+      effective: Array.isArray(raw.effective) ? raw.effective : selected,
+      truncated: raw.truncated === true,
+      workspaces: Array.isArray(raw.workspaces)
+        ? raw.workspaces
+            .filter((row) => typeof row?.id === 'string' && typeof row?.path === 'string')
+            .map((row) => ({
+              id: row.id,
+              title: typeof row.title === 'string' && row.title !== '' ? row.title : row.id,
+              path: row.path,
+              selection: Array.isArray(row.selection) ? row.selection.filter((n) => typeof n === 'string') : [],
+            }))
+        : [],
+      activeWorkspaceId: typeof raw.activeWorkspaceId === 'string' ? raw.activeWorkspaceId : null,
       available: raw.available ?? [],
       unresolved: raw.unresolved ?? [],
       injected: raw.injected ?? [],
@@ -216,6 +255,10 @@ export function apply(ctx: Context): void {
         error: String((e as Error)?.message ?? e),
         mode: 'each-prompt',
         selected: [],
+        effective: [],
+        truncated: false,
+        workspaces: [],
+        activeWorkspaceId: null,
         available: [],
         unresolved: [],
         injected: [],
@@ -253,6 +296,10 @@ export function apply(ctx: Context): void {
     const [selected, setSelected] = React.useState<string[]>(snap?.selected ?? [])
     const [mode, setMode] = React.useState<'each-prompt' | 'start-only'>(snap?.mode ?? 'each-prompt')
     const [showDock, setShowDock] = React.useState<boolean>(snap?.showDock ?? true)
+    // Per-workspace additions, mirrored locally and saved as a whole map.
+    const [workspaces, setWorkspaces] = React.useState<Record<string, string[]>>({})
+    /** '' edits the global list; a workspace id edits that workspace's additions. */
+    const [target, setTarget] = React.useState<string>('')
     const [saving, setSaving] = React.useState(false)
     const [checking, setChecking] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
@@ -267,21 +314,49 @@ export function apply(ctx: Context): void {
       setSelected(snap.selected)
       setMode(snap.mode)
       setShowDock(snap.showDock !== false)
-    }, [snap?.mode, JSON.stringify(snap?.selected), snap?.showDock])
+      setWorkspaces(Object.fromEntries(snap.workspaces.map((row) => [row.id, row.selection])))
+      // A workspace that disappeared while being edited falls back to global.
+      setTarget((prev) => (prev !== '' && !snap.workspaces.some((row) => row.id === prev) ? '' : prev))
+    }, [snap?.mode, JSON.stringify(snap?.selected), snap?.showDock, JSON.stringify(snap?.workspaces)])
+
+    const extra = target === '' ? [] : (workspaces[target] ?? [])
+
+    /** Checked means "injected for this target": global rows are a locked base. */
+    function isChecked(name: string): boolean {
+      return target === '' ? selected.includes(name) : selected.includes(name) || extra.includes(name)
+    }
+
+    /** Under a workspace target, global names are shown but cannot be unticked here. */
+    function isLocked(name: string): boolean {
+      return target !== '' && selected.includes(name)
+    }
 
     function toggle(name: string, checked: boolean): void {
       setSaved(false)
-      setSelected((prev) => (checked ? [...prev, name] : prev.filter((n) => n !== name)))
+      if (target === '') {
+        setSelected((prev) => (checked ? [...prev, name] : prev.filter((n) => n !== name)))
+        return
+      }
+      setWorkspaces((prev) => {
+        const current = prev[target] ?? []
+        const next = checked ? [...current, name] : current.filter((n) => n !== name)
+        return { ...prev, [target]: next }
+      })
     }
 
-    async function save(next?: string[]): Promise<void> {
+    async function save(overrides?: { selected?: string[]; workspaces?: Record<string, string[]> }): Promise<void> {
       setSaving(true)
       setError(null)
       try {
         const res = await fetch(API_CONFIG, {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode, selected: next ?? selected, showDock }),
+          body: JSON.stringify({
+            mode,
+            selected: overrides?.selected ?? selected,
+            showDock,
+            workspaces: overrides?.workspaces ?? workspaces,
+          }),
         })
         const body = (await res.json()) as { ok: boolean; error?: string }
         if (!body.ok) throw new Error(body.error ?? 'HTTP ' + res.status)
@@ -296,10 +371,26 @@ export function apply(ctx: Context): void {
 
     /** Remove a name the host could not resolve — the only way out of a stale selection. */
     async function remove(name: string): Promise<void> {
-      const next = selected.filter((n) => n !== name)
-      setSelected(next)
       setSaved(false)
-      await save(next)
+      if (target === '') {
+        const next = selected.filter((n) => n !== name)
+        setSelected(next)
+        await save({ selected: next })
+        return
+      }
+      const nextWorkspaces = { ...workspaces, [target]: (workspaces[target] ?? []).filter((n) => n !== name) }
+      setWorkspaces(nextWorkspaces)
+      await save({ workspaces: nextWorkspaces })
+    }
+
+    /** Drop this workspace's additions; the global selection still applies there. */
+    async function clearWorkspace(): Promise<void> {
+      if (target === '') return
+      const next = { ...workspaces }
+      delete next[target]
+      setWorkspaces(next)
+      setSaved(false)
+      await save({ workspaces: next })
     }
 
     /** Re-run the same refresh the 5s poll performs, with visible feedback. */
@@ -326,6 +417,40 @@ export function apply(ctx: Context): void {
       bare ? null : h('div', { className: 'dsi-title' }, 'Skill Injector'),
       bare ? null : h('div', { className: 'dsi-sub' }, 'Inject chosen skills into every session. Choose skills and mode, then Save.'),
       bare ? null : h(Lead),
+      snap.truncated
+        ? h(
+            'div',
+            { className: 'dsi-warn' },
+            'Skill cap reached (16): some workspace skills are not injected. Untick a few to make room.',
+          )
+        : null,
+      snap.workspaces.length > 0
+        ? h(
+            'div',
+            { className: 'dsi-target' },
+            h('span', { className: 'dsi-target-label' }, 'Injection target'),
+            h(
+              'select',
+              {
+                className: 'dsi-select',
+                value: target,
+                onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
+                  setTarget(e.target.value)
+                  setSaved(false)
+                },
+              },
+              h('option', { value: '' }, '全局 (all sessions)'),
+              snap.workspaces.map((row) =>
+                h(
+                  'option',
+                  { key: row.id, value: row.id },
+                  row.title + (row.selection.length > 0 ? ' (+' + row.selection.length + ')' : '') + ' — ' + row.path,
+                ),
+              ),
+            ),
+            target !== '' ? h('span', { className: 'dsi-target-hint' }, 'adds on top of the global selection') : null,
+          )
+        : null,
       h(
         'div',
         null,
@@ -333,7 +458,7 @@ export function apply(ctx: Context): void {
           const sectionOpen = openGroups['section:' + section.scope] === true
           const sectionTotal = section.groups.reduce((n, group) => n + group.skills.length, 0)
           const sectionPicked = section.groups.reduce(
-            (n, group) => n + group.skills.filter((skill) => selected.includes(skill.name)).length,
+            (n, group) => n + group.skills.filter((skill) => isChecked(skill.name)).length,
             0,
           )
           return h(
@@ -358,7 +483,7 @@ export function apply(ctx: Context): void {
                   section.groups.map((group) => {
                     const key = 'group:' + section.scope + '::' + group.label
                     const open = openGroups[key] === true
-                    const picked = group.skills.filter((skill) => selected.includes(skill.name)).length
+                    const picked = group.skills.filter((skill) => isChecked(skill.name)).length
                     return h(
                       'div',
                       { key: group.label, className: 'dsi-group' },
@@ -379,13 +504,19 @@ export function apply(ctx: Context): void {
                                 { key: skill.name, className: 'dsi-item' },
                                 h('input', {
                                   type: 'checkbox',
-                                  checked: selected.includes(skill.name),
+                                  checked: isChecked(skill.name),
+                                  disabled: isLocked(skill.name),
                                   onChange: (e: React.ChangeEvent<HTMLInputElement>) => toggle(skill.name, e.target.checked),
                                 }),
                                 h(
                                   'div',
                                   null,
-                                  h('div', { className: 'dsi-item-name' }, skill.name),
+                                  h(
+                                    'div',
+                                    { className: 'dsi-item-name' },
+                                    skill.name,
+                                    isLocked(skill.name) ? h('span', { className: 'dsi-badge' }, 'global') : null,
+                                  ),
                                   h('div', { className: 'dsi-item-desc' }, skill.description),
                                 ),
                               ),
@@ -464,9 +595,17 @@ export function apply(ctx: Context): void {
         }),
         'Show the injected-skills line under the composer',
       ),
+      target !== ''
+        ? h(
+            'button',
+            { className: 'dsi-mini', onClick: () => void clearWorkspace(), disabled: saving || extra.length === 0 },
+            'Clear this workspace’s additions',
+          )
+        : null,
       h('button', { className: 'dsi-save', onClick: () => void save(), disabled: saving }, saving ? 'Saving…' : 'Save'),
       error !== null ? h('div', { className: 'dsi-error' }, error) : null,
       saved ? h('div', { className: 'dsi-status' }, 'Saved') : null,
+      h('div', { className: 'dsi-status' }, 'This session receives: ' + (snap.effective.length > 0 ? snap.effective.join(', ') : 'none')),
       h(
         'div',
         { className: 'dsi-status' },
@@ -480,7 +619,7 @@ export function apply(ctx: Context): void {
     if (snap === null || !snap.ok) return null
     // User opt-out: the settings page carries the same information inline.
     if (snap.showDock === false) return null
-    const names = snap.selected.length > 0 ? snap.selected.join(', ') : 'none'
+    const names = snap.effective.length > 0 ? snap.effective.join(', ') : 'none'
     const unresolved = snap.unresolved.length
     return React.createElement(
       'div',

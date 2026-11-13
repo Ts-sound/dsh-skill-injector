@@ -18,6 +18,7 @@
 | 左侧边栏入口 | `sidebar.panellist` id `dsh-skill-injector`（order 10）：图标行，点击切到全局面板 |
 | 全局面板 | `main` keyed slot，key `dsh-skill-injector`：顶行是简介 + GitHub 链接，下面复用设置页的选择/模式控件，整体居中（max-width 720px），带「Back to conversation」返回 |
 | 按目录分组 | 技能先按来源分「全局空间」（`user-*` / `bundled` / `runtime` / 其它）和「项目工具」（`project-*`，随当前工作区发现），再按 `SKILL.md` 所在目录分组（取最近的 `skills` 根之下的相对路径，如 `skills-tong / engineering`；根下的技能与无路径的虚拟技能归入 `Other`）；两层默认折叠，点标题展开，右侧显示 `已选/总数` |
+| 按工作区细化 | 面板顶部下拉选择注入目标：`全局 (all sessions)` 或某个已注册工作区；工作区目标下勾选写入 `workspaces[id]`，与全局选择**合并**生效（该工作区里全局项锁定并标 `global`），可一键清除本工作区追加；超上限时显示黄条提示 |
 | 输入区指示 | `conversation.composer.dock` id `dsh-skill-injector-dock`（order 10）：`Injected Skills: … · Mode: … (· N unresolved)`，可在设置页隐藏 |
 | 重启存续 | 打包插件，`dsh plugin add` 安装一次，每次 DSH 启动自动加载 |
 
@@ -57,8 +58,11 @@ dsh plugin --profile web add ./dsh-skill-injector
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `mode` | `each-prompt` \| `start-only` | `each-prompt` | 每轮注入，还是仅会话开始注入一次 |
-| `selected` | `string[]` | `[]` | 选中的技能名，最多 16 个，必须是合法 kebab-case |
+| `selected` | `string[]` | `[]` | 全局选中的技能名，最多 16 个，必须是合法 kebab-case |
 | `showDock` | `boolean` | `true` | 是否在输入区上方显示注入指示行 |
+| `workspaces` | `Record<string, string[]>` | `{}` | 按工作区 id 追加的技能名；会话 cwd 落在该工作区内时，在全局选择之后追加（合并、去重，合计仍受 16 个上限约束） |
+
+生效选择 = `selected` ∪ `workspaces[当前会话所属工作区]`。工作区来自 `ctx.workspaceRegistry`（`@deepseek-ai/dsh-workspace`），按会话头 `cwd` 与工作区 `path` 的最长前缀匹配；没有注册表时只用全局选择。写入时 registry 中已不存在的工作区 id 会被剪除。
 
 体量常量：轮询 `5s`、冷缓存 stamp 等待上限 `3000ms`、每 agent 注入记录上限 `200`、section order `150`。
 

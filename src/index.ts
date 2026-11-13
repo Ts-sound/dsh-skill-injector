@@ -24,7 +24,9 @@ import {
   buildInjectionMessage,
   classifySelection,
   escapePromptBraces,
+  mergeSelection,
   validateSelection,
+  workspaceForCwd,
   type CatalogObservation,
   type ClassifiedSkill,
   type InjectorConfig,
@@ -62,6 +64,10 @@ export const Config = z.object({
   // Opt-out for the composer dock line: users running other dock contributions
   // need a way to reclaim the space without patching the built client bundle.
   showDock: z.boolean().default(true).volatile(),
+  // Per-workspace ADDITIONS to `selected`, keyed by `workspaceRegistry` id. A
+  // session whose cwd sits inside a registered workspace also receives that
+  // workspace's list; everything else gets the global selection alone.
+  workspaces: z.dict(z.array(z.string())).default({}).volatile(),
 })
 
 // Hard deps: webServer serves the routes, settings persists the selection,
@@ -97,7 +103,16 @@ interface Snapshot {
   ok: boolean
   error?: string
   mode: InjectorConfig['mode']
+  /** The GLOBAL selection (what the panel's global target edits). */
   selected: string[]
+  /** What this session actually receives: global + its workspace's additions. */
+  effective: string[]
+  /** True when the merge hit MAX_SELECTED and some workspace skills were dropped. */
+  truncated: boolean
+  /** Workspaces the panel may target; empty when no registry is mounted. */
+  workspaces: Array<{ id: string; title: string; path: string; selection: string[] }>
+  /** The workspace this session resolves to, or null outside every workspace. */
+  activeWorkspaceId: string | null
   available: Array<{ name: string; description: string; path?: string; source?: string }>
   unresolved: UnresolvedSkill[]
   injected: string[]
@@ -107,11 +122,29 @@ interface Snapshot {
   showDock: boolean
 }
 
+/** One registry workspace, as this plugin needs it. */
+interface WorkspaceRow {
+  id: string
+  path: string
+  title: string
+}
+
+/** The subset of `ctx.workspaceRegistry` this plugin reads. */
+interface WorkspaceRegistryLike {
+  list?: () => Array<{ id?: unknown; path?: unknown; title?: unknown }>
+}
+
 /** One classification pass: the inputs it was computed from, plus its rows. */
 interface ResolvePass {
   key: string
   mode: InjectorConfig['mode']
+  /** The global selection, echoed to the panel. */
   selected: string[]
+  /** The merged selection the rows describe. */
+  effective: string[]
+  truncated: boolean
+  /** Workspace this pass resolved against, if any. */
+  workspaceId?: string
   rows: ClassifiedSkill[]
   /** Names holding a last-good body after this pass, so `cached` describes this pass. */
   cached: ReadonlySet<string>
@@ -173,6 +206,7 @@ interface PluginConfig {
   mode?: VolatileValue<string> | string
   selected?: VolatileValue<string[]> | string[]
   showDock?: VolatileValue<boolean> | boolean
+  workspaces?: VolatileValue<Record<string, string[]>> | Record<string, string[]>
 }
 
 /** Unwrap a volatile reference, tolerating a plain value (tests, older hosts). */
@@ -185,11 +219,17 @@ function readLive<T>(value: VolatileValue<T> | T | undefined, fallback: T): T {
 }
 
 /** Normalize the Loader-supplied Config into a validated InjectorConfig. */
-function resolveConfig(raw: { mode?: unknown; selected?: unknown; showDock?: unknown }): InjectorConfig {
+function resolveConfig(raw: {
+  mode?: unknown
+  selected?: unknown
+  showDock?: unknown
+  workspaces?: unknown
+}): InjectorConfig {
   const r = validateSelection({
     mode: raw.mode ?? 'each-prompt',
     selected: Array.isArray(raw.selected) ? raw.selected : [],
     showDock: raw.showDock ?? true,
+    ...(raw.workspaces !== undefined ? { workspaces: raw.workspaces } : {}),
   })
   return r.ok ? r.config : { mode: 'each-prompt', selected: [], showDock: true }
 }
@@ -230,6 +270,7 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
       mode: readLive(pluginConfig?.mode, 'each-prompt'),
       selected: readLive(pluginConfig?.selected, []),
       showDock: readLive(pluginConfig?.showDock, true),
+      workspaces: readLive(pluginConfig?.workspaces, {}),
     })
   }
 
@@ -315,6 +356,45 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
   }
 
   /**
+   * The registered workspaces, or [] when the profile has no registry (a host
+   * without `@deepseek-ai/dsh-workspace`). Every field is read defensively: the
+   * registry belongs to another plugin, so a shape change must degrade to
+   * "no workspaces", never to a failed apply.
+   */
+  function workspaceRows(): WorkspaceRow[] {
+    try {
+      const registry = c.get?.('workspaceRegistry') as WorkspaceRegistryLike | undefined
+      const rows = registry?.list?.() ?? []
+      const out: WorkspaceRow[] = []
+      for (const row of rows) {
+        if (typeof row?.id !== 'string' || typeof row?.path !== 'string') continue
+        out.push({ id: row.id, path: row.path, title: typeof row.title === 'string' && row.title !== '' ? row.title : row.id })
+      }
+      return out
+    } catch {
+      return []
+    }
+  }
+
+  /** The workspace this session's cwd resolves to (longest registered prefix). */
+  function activeWorkspaceId(): string | undefined {
+    const agent = currentAgent ?? discoverAgent()
+    const cwd = agent?.session?.header?.cwd
+    return workspaceForCwd(cwd, workspaceRows())
+  }
+
+  /**
+   * The selection one session receives: the global list plus that workspace's
+   * additions. A cwd outside every workspace (or no registry) is global only.
+   */
+  function effectiveFor(cfg: InjectorConfig): { selected: string[]; truncated: boolean; workspaceId?: string } {
+    const workspaceId = activeWorkspaceId()
+    const extra = workspaceId !== undefined ? (cfg.workspaces?.[workspaceId] ?? []) : []
+    const merged = mergeSelection(cfg.selected, extra)
+    return { ...merged, ...(workspaceId !== undefined ? { workspaceId } : {}) }
+  }
+
+  /**
    * One classification pass over the current selection. Reads the catalog once
    * (with its completeness flag), loads bodies only for advertised names, then
    * applies the result to the last-good body map.
@@ -329,7 +409,12 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
     // the selection they describe disagree.
     const cfg = config()
     const options = lookupOptions()
-    const key = (options !== undefined ? 'scoped:' : 'unscoped:') + cfg.selected.join(',')
+    const effective = effectiveFor(cfg)
+    const key =
+      (options !== undefined ? 'scoped:' : 'unscoped:') +
+      (effective.workspaceId ?? '-') +
+      ':' +
+      effective.selected.join(',')
     if (refreshInFlight !== null && refreshInFlight.key === key) return refreshInFlight.promise
     const seq = ++passSeq
     const promise = (async (): Promise<ResolvePass> => {
@@ -354,7 +439,7 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
       const advertised = new Set(catalog.kind === 'scoped' ? catalog.names : [])
       const loads = new Map<string, LoadOutcome>()
       const fresh = new Map<string, SkillDef>()
-      for (const skillName of cfg.selected) {
+      for (const skillName of effective.selected) {
         if (!advertised.has(skillName)) continue
         try {
           const skill = await skills.get(skillName, options)
@@ -375,13 +460,22 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
         }
       }
 
-      const rows = classifySelection({ selected: cfg.selected, catalog, scoped, loads })
+      const rows = classifySelection({ selected: effective.selected, catalog, scoped, loads })
       // Compute this pass's body map even when a newer pass already superseded it,
       // so `cached` always describes the rows it is returned with. Only the newest
       // pass may publish it.
       const nextBodies = applyBodies(prevBodies, rows, fresh)
       if (seq === passSeq) bodies = nextBodies
-      return { key, mode: cfg.mode, selected: cfg.selected, rows, cached: new Set(nextBodies.keys()) }
+      return {
+        key,
+        mode: cfg.mode,
+        selected: cfg.selected,
+        effective: effective.selected,
+        truncated: effective.truncated,
+        ...(effective.workspaceId !== undefined ? { workspaceId: effective.workspaceId } : {}),
+        rows,
+        cached: new Set(nextBodies.keys()),
+      }
     })().finally(() => {
       if (refreshInFlight !== null && refreshInFlight.promise === promise) refreshInFlight = null
     })
@@ -389,10 +483,10 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
     return promise
   }
 
-  /** Concatenated <skill_content> blocks for the selection (each-prompt path). */
+  /** Concatenated <skill_content> blocks for the effective selection (each-prompt path). */
   function renderActiveSkills(): string {
     const blocks: string[] = []
-    for (const skillName of config().selected) {
+    for (const skillName of effectiveFor(config()).selected) {
       // Renders any name that has a body, whatever its state: transient failures
       // keep their last-good body and `unknown` is the only state without one.
       const skill = bodies.get(skillName)
@@ -451,7 +545,7 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
     const cfg = config()
     if (cfg.mode !== 'start-only') return
     const stamped = new Set(injectedByAgent.get(id) ?? [])
-    for (const skillName of cfg.selected) {
+    for (const skillName of effectiveFor(cfg).selected) {
       if (stamped.has(skillName)) continue
       const skill = bodies.get(skillName)
       if (skill === undefined) continue
@@ -530,15 +624,29 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
     const unresolved: UnresolvedSkill[] = pass.rows
       .filter((r) => r.state !== 'ready')
       .map((r) => ({ ...r, cached: pass.cached.has(r.name) }))
+    // The panel edits one target at a time: the global list, or one workspace's
+    // additions. Rows are reported for every live workspace so a removed one
+    // stops being offered (its stored entry simply stops matching anything).
+    const cfg = config()
+    const workspaces = workspaceRows().map((row) => ({
+      id: row.id,
+      title: row.title,
+      path: row.path,
+      selection: cfg.workspaces?.[row.id] ?? [],
+    }))
     return {
       ok: true,
       mode: pass.mode,
       selected: pass.selected,
+      effective: pass.effective,
+      truncated: pass.truncated,
+      workspaces,
+      activeWorkspaceId: pass.workspaceId ?? null,
       available,
       unresolved,
       injected: currentAgentId !== null ? (injectedByAgent.get(currentAgentId) ?? []) : [],
       canRemove: hasScopedRead,
-      showDock: config().showDock,
+      showDock: cfg.showDock,
     }
   }
 
@@ -635,13 +743,30 @@ export function apply(ctx: Context, pluginConfig?: PluginConfig): void {
           // wrappers instead of reloading the entry; echo what was validated so
           // the page can settle immediately, and warm the cache in the
           // background for the next poll.
-          await settings.update(ENTRY_ID, r.config)
+          //
+          // Workspace entries for workspaces that no longer exist are dropped
+          // on write: the registry is authoritative, and keeping orphans would
+          // let a re-created directory inherit a stale selection.
+          let patch: InjectorConfig = r.config
+          if (r.config.workspaces !== undefined) {
+            const live = workspaceRows()
+            if (live.length > 0) {
+              const ids = new Set(live.map((row) => row.id))
+              const kept: Record<string, string[]> = {}
+              for (const [id, names] of Object.entries(r.config.workspaces)) {
+                if (ids.has(id)) kept[id] = names
+              }
+              patch = { ...r.config, workspaces: kept }
+            }
+          }
+          await settings.update(ENTRY_ID, patch)
           void resolveSelection()
           json(res, 200, {
             ok: true,
-            mode: r.config.mode,
-            selected: r.config.selected,
-            showDock: r.config.showDock,
+            mode: patch.mode,
+            selected: patch.selected,
+            showDock: patch.showDock,
+            ...(patch.workspaces !== undefined ? { workspaces: patch.workspaces } : {}),
           })
         } catch (e) {
           json(res, 500, { ok: false, error: errorText(e) })

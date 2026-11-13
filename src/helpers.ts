@@ -18,6 +18,11 @@ export interface InjectorConfig {
    * Defaults to `true` so existing installs keep the line; opt-out only.
    */
   showDock: boolean
+  /**
+   * Per-workspace ADDITIONS to `selected`, keyed by `workspaceRegistry` id.
+   * Absent means no workspace adds anything (the pre-workspace behaviour).
+   */
+  workspaces?: Record<string, string[]>
 }
 
 /** Prompt-bloat guard: at most this many skills can be selected. */
@@ -65,7 +70,84 @@ export function validateSelection(
   if (selected.length > MAX_SELECTED) {
     return { ok: false, error: `too many skills (max ${MAX_SELECTED})` }
   }
-  return { ok: true, config: { mode, selected, showDock: raw.showDock !== false } }
+  // Optional: a client that predates per-workspace additions sends no map, and
+  // the resolved config then keeps the plain global shape.
+  let workspaces: Record<string, string[]> | undefined
+  if (raw.workspaces !== undefined) {
+    if (typeof raw.workspaces !== 'object' || raw.workspaces === null || Array.isArray(raw.workspaces)) {
+      return { ok: false, error: 'workspaces must be an object keyed by workspace id' }
+    }
+    workspaces = {}
+    for (const [id, list] of Object.entries(raw.workspaces as Record<string, unknown>)) {
+      if (typeof id !== 'string' || id.trim() === '') {
+        return { ok: false, error: 'workspace ids must be non-empty strings' }
+      }
+      if (!Array.isArray(list)) {
+        return { ok: false, error: `workspace "${id}" must map to an array of skill names` }
+      }
+      const names: string[] = []
+      for (const name of list) {
+        if (typeof name !== 'string' || !isSkillName(name)) {
+          return { ok: false, error: `invalid skill name "${String(name)}" in workspace "${id}"` }
+        }
+        if (!names.includes(name)) names.push(name)
+      }
+      if (names.length > MAX_SELECTED) {
+        return { ok: false, error: `too many skills in workspace "${id}" (max ${MAX_SELECTED})` }
+      }
+      workspaces[id] = names
+    }
+  }
+  return {
+    ok: true,
+    config: { mode, selected, showDock: raw.showDock !== false, ...(workspaces !== undefined ? { workspaces } : {}) },
+  }
+}
+
+/**
+ * The set one session actually receives: the global selection first, then the
+ * active workspace's additions, deduped in order and capped at MAX_SELECTED.
+ * Global entries win the cap because they apply everywhere.
+ */
+export function mergeSelection(
+  global: readonly string[],
+  extra: readonly string[] = [],
+  max: number = MAX_SELECTED,
+): { selected: string[]; truncated: boolean } {
+  const merged: string[] = []
+  for (const name of [...global, ...extra]) {
+    if (!merged.includes(name)) merged.push(name)
+  }
+  return { selected: merged.slice(0, max), truncated: merged.length > max }
+}
+
+/** Case-insensitive, slash-normalized form used only for prefix matching. */
+function normalizeForMatch(path: string): string {
+  let p = path.replace(/\\/g, '/').toLowerCase()
+  while (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1)
+  return p
+}
+
+/**
+ * The workspace a session cwd belongs to: the longest registered path that is
+ * the cwd itself or an ancestor directory of it. A cwd outside every workspace
+ * (or a missing cwd) returns undefined, which means "global selection only".
+ */
+export function workspaceForCwd(
+  cwd: string | undefined,
+  workspaces: readonly { id: string; path: string }[],
+): string | undefined {
+  if (typeof cwd !== 'string' || cwd === '') return undefined
+  const target = normalizeForMatch(cwd)
+  let best: { id: string; length: number } | undefined
+  for (const workspace of workspaces) {
+    if (typeof workspace.id !== 'string' || typeof workspace.path !== 'string') continue
+    const base = normalizeForMatch(workspace.path)
+    if (base === '') continue
+    if (target !== base && !target.startsWith(base + '/')) continue
+    if (best === undefined || base.length > best.length) best = { id: workspace.id, length: base.length }
+  }
+  return best?.id
 }
 
 /**

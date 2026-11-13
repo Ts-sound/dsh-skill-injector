@@ -20,6 +20,8 @@ import {
   classifySelection,
   applyBodies,
   cachedSuffix,
+  mergeSelection,
+  workspaceForCwd,
 } from '../lib/helpers.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -204,6 +206,15 @@ const PONYTAIL = {
   source: 'user-agents',
 }
 
+const LLMTRIM = {
+  name: 'llmtrim',
+  description: 'trim llm context',
+  content: 'BODY-LLMTRIM',
+  provider: 'filesystem',
+  invocation: { modelInvocable: true, userInvocable: true },
+  source: 'user-agents',
+}
+
 /** Advertised by the catalog, but not model invocable, so never `available`. */
 const HIDDEN = {
   name: 'secret',
@@ -219,17 +230,20 @@ function makeConfig(initial) {
   let mode = initial.mode
   let selected = initial.selected
   let showDock = initial.showDock ?? true
+  let workspaces = initial.workspaces ?? {}
   return {
     config: {
       mode: { get: () => mode },
       selected: { get: () => selected },
       showDock: { get: () => showDock },
+      workspaces: { get: () => workspaces },
     },
-    current: () => ({ mode, selected, showDock }),
+    current: () => ({ mode, selected, showDock, workspaces }),
     commit(patch) {
       if (patch.mode !== undefined) mode = patch.mode
       if (patch.selected !== undefined) selected = patch.selected
       if (patch.showDock !== undefined) showDock = patch.showDock
+      if (patch.workspaces !== undefined) workspaces = patch.workspaces
     },
   }
 }
@@ -335,10 +349,10 @@ async function snapshot(routes) {
 }
 
 /** A live-agent stub with the DSH >= 0.2 history accessor. */
-function makeAgent(id, injected, events = []) {
+function makeAgent(id, injected, events = [], cwd = 'C:/work') {
   return {
     id,
-    session: { header: { cwd: 'C:/work' }, ownEvents: () => events },
+    session: { header: { cwd }, ownEvents: () => events },
     inject: (message) => injected.push(message),
   }
 }
@@ -388,14 +402,18 @@ test('contract 9: GET snapshot is complete JSON and concurrent reads share one p
 
   const snap = await snapshot(h.routes)
   assert.deepEqual(Object.keys(snap).sort(), [
+    'activeWorkspaceId',
     'available',
     'canRemove',
+    'effective',
     'injected',
     'mode',
     'ok',
     'selected',
     'showDock',
+    'truncated',
     'unresolved',
+    'workspaces',
   ])
   assert.equal(snap.ok, true)
 
@@ -679,4 +697,101 @@ test('contract 16: loader/volatile-update re-resolves the selection in place', a
   assert.equal(off.status, 200)
   assert.equal(JSON.parse(off.body).showDock, false)
   assert.equal((await snapshot(h.routes)).showDock, false)
+})
+
+// --- Contract 17: mergeSelection -----------------------------------------
+test('contract 17: mergeSelection appends workspace extras after the global list', () => {
+  const merged = mergeSelection(['ponytail', 'caveman'], ['caveman', 'llmtrim'])
+  assert.deepEqual(merged.selected, ['ponytail', 'caveman', 'llmtrim'], 'global first, extras appended, no duplicates')
+  assert.equal(merged.truncated, false)
+
+  // A workspace list alone can overflow the cap: the overflow is reported.
+  const big = Array.from({ length: MAX_SELECTED + 2 }, (_, i) => 'skill-' + i)
+  const capped = mergeSelection([], big)
+  assert.equal(capped.selected.length, MAX_SELECTED)
+  assert.equal(capped.truncated, true)
+
+  // Extras beyond the remaining room are dropped, not merged past the cap.
+  const full = mergeSelection(Array.from({ length: MAX_SELECTED }, (_, i) => 'g-' + i), ['extra'])
+  assert.equal(full.selected.length, MAX_SELECTED)
+  assert.equal(full.truncated, true)
+  assert.equal(full.selected.includes('extra'), false)
+})
+
+// --- Contract 18: workspace extras merge into the effective selection ----
+test('contract 18: a workspace adds its extras on top of the global selection', async () => {
+  const registry = {
+    workspaceRegistry: { list: () => [{ id: 'ws-a', path: 'C:/work', title: 'Repo A' }] },
+  }
+  const h = makeHarness(
+    { mode: 'each-prompt', selected: ['ponytail'], workspaces: { 'ws-a': ['llmtrim'] } },
+    scopedRegistry([PONYTAIL, LLMTRIM]),
+    registry,
+  )
+  apply(h.ctx, h.config)
+  await h.emit('agent/created', { agent: makeAgent('s1', [], [], 'C:/work'), source: 'new' })
+  const snap = await snapshot(h.routes)
+
+  assert.deepEqual(snap.selected, ['ponytail'], 'the stored global selection is untouched')
+  assert.deepEqual(snap.effective, ['ponytail', 'llmtrim'], 'the workspace extra is appended')
+  assert.equal(snap.activeWorkspaceId, 'ws-a')
+  assert.equal(snap.truncated, false)
+  assert.deepEqual(snap.workspaces, [{ id: 'ws-a', title: 'Repo A', path: 'C:/work', selection: ['llmtrim'] }])
+  assert.match(h.sections[0].text(), /BODY-PONYTAIL/)
+  assert.match(h.sections[0].text(), /BODY-LLMTRIM/)
+})
+
+// --- Contract 19: cwd matching is a longest-prefix match -----------------
+test('contract 19: a nested cwd resolves to the workspace whose path contains it', () => {
+  const workspaces = [
+    { id: 'root', path: 'C:/work' },
+    { id: 'nested', path: 'C:/work/nested' },
+  ]
+  assert.equal(workspaceForCwd('C:/work/nested/src', workspaces), 'nested')
+  assert.equal(workspaceForCwd('C:/Work/Nested/x', workspaces), 'nested', 'case-insensitive prefix')
+  assert.equal(workspaceForCwd('C:\\work\\nested', workspaces), 'nested', 'backslashes normalise')
+  assert.equal(workspaceForCwd('C:/workspace-x', workspaces), undefined, 'a sibling prefix must not match')
+  assert.equal(workspaceForCwd(undefined, workspaces), undefined)
+})
+
+// --- Contract 20: no registry falls back to the global selection ---------
+test('contract 20: without a workspace registry the global selection still applies', async () => {
+  const h = makeHarness(
+    { mode: 'each-prompt', selected: ['ponytail'], workspaces: { 'ws-a': ['llmtrim'] } },
+    scopedRegistry([PONYTAIL, LLMTRIM]),
+  )
+  apply(h.ctx, h.config)
+  await h.emit('agent/created', { agent: makeAgent('s1', [], [], 'C:/work'), source: 'new' })
+  const snap = await snapshot(h.routes)
+
+  assert.equal(snap.activeWorkspaceId, null)
+  assert.deepEqual(snap.workspaces, [])
+  assert.deepEqual(snap.effective, ['ponytail'], 'unmatched workspace extras never leak in')
+  assert.equal(snap.truncated, false)
+})
+
+// --- Contract 21: PUT persists workspaces and prunes dead ids ------------
+test('contract 21: PUT persists workspace selections and drops ids the registry no longer has', async () => {
+  const registry = {
+    workspaceRegistry: { list: () => [{ id: 'ws-a', path: 'C:/work', title: 'Repo A' }] },
+  }
+  const h = makeHarness({ mode: 'each-prompt', selected: [] }, scopedRegistry([PONYTAIL]), registry)
+  apply(h.ctx, h.config)
+
+  const put = async (body) => {
+    const res = makeRes()
+    await h.routes.get('/dsh-skill-injector/api/config')([typeof body === 'string' ? body : JSON.stringify(body)], res)
+    return { status: res.status, snap: JSON.parse(res.body) }
+  }
+
+  const ok = await put({ mode: 'each-prompt', selected: [], workspaces: { 'ws-a': ['ponytail'], gone: ['x'] } })
+  assert.equal(ok.status, 200)
+  assert.deepEqual(ok.snap.workspaces, { 'ws-a': ['ponytail'] }, 'the orphan id is pruned before saving')
+  assert.deepEqual(h.updates.at(-1)[1].workspaces, { 'ws-a': ['ponytail'] })
+
+  const snapAfter = await snapshot(h.routes)
+  assert.deepEqual(snapAfter.workspaces.map((w) => w.id), ['ws-a'], 'the snapshot offers the live workspace only')
+
+  const bad = await put({ mode: 'each-prompt', selected: [], workspaces: { 'ws-a': [42] } })
+  assert.equal(bad.status, 400, 'a non-string skill name is rejected')
 })
