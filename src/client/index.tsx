@@ -55,6 +55,17 @@ function scopeOf(source: string | undefined): SkillScope {
   return '全局空间'
 }
 
+/** Mirrors the host's merge rule: base first, additions after, deduped and capped. */
+const MAX_PREVIEW = 16
+
+function mergePreview(base: string[], extra: string[]): string[] {
+  const out: string[] = []
+  for (const name of [...base, ...extra]) {
+    if (!out.includes(name)) out.push(name)
+  }
+  return out.slice(0, MAX_PREVIEW)
+}
+
 /** Stable display order: alphabetical, with ungrouped rows last. */
 function groupAvailable(
   available: AvailableSkill[],
@@ -186,6 +197,7 @@ export function apply(ctx: Context): void {
     '.dsi-modes label{display:flex;gap:6px;align-items:center}',
     '.dsi-save{padding:6px 16px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer}',
     '.dsi-status{font-size:12px;opacity:.7}',
+    '.dsi-hint{font-size:12px;opacity:.55}',
     '.dsi-error{color:var(--dsw-alias-state-error-primary);font-size:12px}',
     '.dsi-urow{display:flex;align-items:center;gap:8px;font-size:12px}',
     '.dsi-urow>.dsi-status{flex:1;min-width:0;overflow-wrap:anywhere}',
@@ -320,6 +332,10 @@ export function apply(ctx: Context): void {
     }, [snap?.mode, JSON.stringify(snap?.selected), snap?.showDock, JSON.stringify(snap?.workspaces)])
 
     const extra = target === '' ? [] : (workspaces[target] ?? [])
+    // Bottom status follows the *target*: what the global list injects, or what
+    // the chosen workspace receives after merging its additions onto the base.
+    const preview = target === '' ? selected : mergePreview(selected, extra)
+    const previewTitle = target === '' ? '' : (snap?.workspaces.find((row) => row.id === target)?.title ?? target)
 
     /** Checked means "injected for this target": global rows are a locked base. */
     function isChecked(name: string): boolean {
@@ -605,12 +621,13 @@ export function apply(ctx: Context): void {
       h('button', { className: 'dsi-save', onClick: () => void save(), disabled: saving }, saving ? 'Saving…' : 'Save'),
       error !== null ? h('div', { className: 'dsi-error' }, error) : null,
       saved ? h('div', { className: 'dsi-status' }, 'Saved') : null,
-      h('div', { className: 'dsi-status' }, 'This session receives: ' + (snap.effective.length > 0 ? snap.effective.join(', ') : 'none')),
       h(
         'div',
         { className: 'dsi-status' },
-        'Active in this session: ' + (snap.injected.length > 0 ? snap.injected.join(', ') : 'none'),
+        (target === '' ? 'Global injection: ' : 'Workspace injection (' + previewTitle + '): ') +
+          (preview.length > 0 ? preview.join(', ') : 'none'),
       ),
+      target === '' ? null : h('div', { className: 'dsi-hint' }, 'This session receives (host): ' + (snap.effective.length > 0 ? snap.effective.join(', ') : 'none')),
     )
   }
 
