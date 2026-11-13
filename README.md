@@ -2,9 +2,11 @@
 
 `dsh-skill-injector` 是一个打包型 DSH 插件：把用户选中的技能（如 `caveman`、`ponytail`）自动注入每个会话——要么每轮提示都注入（`each-prompt`），要么只在会话开始时注入一次（`start-only`）。自带设置页与输入区指示行，配置写进 profile，重启后依旧生效。
 
-- 目标版本：DSH **0.2.x**（`@deepseek-ai/dsh-skill` / `dsh-llm` `^0.2.1-rc.5`）
+- 目标版本：DSH **0.2.x**（`@deepseek-ai/dsh-skill` / `dsh-llm` 以 peer 方式声明 `>=0.2.0-rc.1 <0.3.0-0`）
 - 技能正文全部来自运行时 `ctx.skills` 注册表，仓库里不存任何技能副本
 - 客户端与宿主之间只有 HTTP 一条缝（`/dsh-skill-injector/api`），没有 RPC
+
+![Skill Injector 全局面板：左侧边栏入口、注入目标下拉、按空间/目录折叠的技能列表](docs/assets/skill-injector-panel.png)
 
 ## ✨ 功能
 
