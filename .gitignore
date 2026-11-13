@@ -36,3 +36,10 @@ yarn-error.log*
 next-env.d.ts
 
 /temp/
+
+# dsh-skill-injector build output
+/lib/
+node_modules/
+
+# local pnpm store/state (sandboxed sessions redirect the user profile here)
+/.pnpm-home/
