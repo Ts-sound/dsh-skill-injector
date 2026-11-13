@@ -2,7 +2,7 @@
 
 `dsh-skill-injector` 是一个打包型 **Cordis 插件（DSH 0.2.x）**：把用户选中的技能注入会话——`each-prompt`（每次组装系统提示时由 `systemPrompt.section` 渲染）或 `start-only`（`agent/created` 时 `agent.inject()` 一条去重的 `skill-invocation` 消息）。宿主半声明 Loader **Config**（`mode`/`selected`/`showDock`/`workspaces`）、经 `GET /dsh-skill-injector/api` + `PUT /dsh-skill-injector/api/config` 提供快照与写入；客户端半 5s 轮询，渲染 `settings.section`、侧边栏入口 + 全局面板（`sidebar.panellist` + `main` keyed slot）与 `conversation.composer.dock`。客户端↔宿主只有 **HTTP** 一条缝。
 
-目标版本：`@deepseek-ai/dsh-skill` / `dsh-llm` `^0.2.1-rc.5`，`@deepseek-ai/cordis` `^4.0.5`。
+目标版本：`@deepseek-ai/dsh-skill` / `dsh-llm` 以 **peerDependencies** 形式声明 `>=0.2.0-rc.1 <0.3.0-0`（宿主提供，本地开发放 `devDependencies`），`@deepseek-ai/cordis` `^4.0.5`。
 
 ## 仓库布局
 
@@ -64,6 +64,7 @@
 - `agent.session.ownEvents()` 是非弃用的会话日志读法；`agent.session.header.cwd` 仍带工作区路径。
 - `renderSkillContent` 来自 `@deepseek-ai/dsh-skill`，`createUserMessage` 来自 `@deepseek-ai/dsh-llm`。
 - 可选服务用 `ctx.get(name)`（loader、agents、**workspaceRegistry**）；只有硬依赖进 `inject`。
+- **宿主接口包只能进 `peerDependencies`（`>=0.2.0-rc.1 <0.3.0-0`），绝不进 `dependencies`**：`@deepseek-ai/dsh-skill` / `dsh-llm` 若被声明为依赖，安装时会被 pnpm 平铺进 profile 的 `node_modules/@deepseek-ai/`，宿主会优先加载这份旧副本（如 0.2.1-rc.5），兼容性预检把内置 skill 服务禁用，连带 `dsh-skills-manager` 全部卡在 `pending (waiting for service: skills)`——这正是原版 skill-injector-plugin@1.2.0 出故障的原因。参与构建/测试时把它们放 `devDependencies` 即可。`@deepseek-ai/schemastery` 是普通库，留在 `dependencies` 无妨。
 - `@deepseek-ai/dsh-workspace` 提供宿主服务 `ctx.workspaceRegistry`：`list()` 同步返回 `{ id, path, title, createdAt, updatedAt, sessionIds }` 数组（newest first），`path` 已是规范化目录；web 组合默认加载它。会话归属看会话头 `cwd`（不是 sessionIds 反查）。
 
 ## 测试
