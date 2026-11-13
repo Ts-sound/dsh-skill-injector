@@ -187,3 +187,496 @@ test('contract 7: isSkillName accepts kebab-case and rejects others', () => {
   assert.equal(isSkillName('-leading'), false)
   assert.equal(isSkillName(''), false)
 })
+
+// =========================================================================
+// Host half (contracts 8-16). Drives the real apply() with a stub Cordis
+// context: the settings ARE the Loader Config, presented as volatile refs.
+// =========================================================================
+
+const { apply, name: pluginName, inject: injectDeps, Config } = await import('../lib/index.js')
+
+const PONYTAIL = {
+  name: 'ponytail',
+  description: 'lazy senior dev',
+  content: 'BODY-PONYTAIL',
+  provider: 'filesystem',
+  invocation: { modelInvocable: true, userInvocable: true },
+  source: 'user-agents',
+}
+
+/** Advertised by the catalog, but not model invocable, so never `available`. */
+const HIDDEN = {
+  name: 'secret',
+  description: 'not model invocable',
+  content: 'BODY-SECRET',
+  provider: 'filesystem',
+  invocation: { modelInvocable: false, userInvocable: true },
+  source: 'user-agents',
+}
+
+/** A live Config as the Loader presents it: schemastery `.volatile()` refs. */
+function makeConfig(initial) {
+  let mode = initial.mode
+  let selected = initial.selected
+  let showDock = initial.showDock ?? true
+  return {
+    config: {
+      mode: { get: () => mode },
+      selected: { get: () => selected },
+      showDock: { get: () => showDock },
+    },
+    current: () => ({ mode, selected, showDock }),
+    commit(patch) {
+      if (patch.mode !== undefined) mode = patch.mode
+      if (patch.selected !== undefined) selected = patch.selected
+      if (patch.showDock !== undefined) showDock = patch.showDock
+    },
+  }
+}
+
+/** Stub ctx exposing only the seams the host half dereferences. */
+function makeHarness(initial, skills, services = {}) {
+  const store = makeConfig(initial)
+  const routes = new Map()
+  const listeners = new Map()
+  const sections = []
+  const updates = []
+  const configured = []
+  let updateThrows = false
+
+  const emit = async (event, payload) => {
+    for (const fn of listeners.get(event) ?? []) await fn(payload)
+  }
+
+  const ctx = {
+    effect: (fn) => {
+      const dispose = fn()
+      return () => {
+        if (typeof dispose === 'function') dispose()
+      }
+    },
+    // Optional-service lookup: `loader` (entry id) and `agents` (scope recovery).
+    get: (serviceName) => services[serviceName],
+    logger: { warn: () => {} },
+    webServer: {
+      register: (route) => {
+        routes.set(route.path, route.handler)
+        return () => routes.delete(route.path)
+      },
+    },
+    settings: {
+      configure: (presentation) => {
+        configured.push(presentation)
+        return () => {}
+      },
+      // The real service merges the patch into the entry Config, which for
+      // volatile fields means updating the live refs and announcing it.
+      update: async (ns, patch) => {
+        if (updateThrows) throw new Error('settings store exploded')
+        updates.push([ns, patch])
+        store.commit(patch)
+        await emit('loader/volatile-update', [['mode'], ['selected'], ['showDock']])
+      },
+    },
+    skills,
+    systemPrompt: {
+      section: (section) => {
+        sections.push(section)
+        return () => {}
+      },
+    },
+    on: (event, fn) => {
+      const set = listeners.get(event) ?? []
+      set.push(fn)
+      listeners.set(event, set)
+      return () => {
+        const i = set.indexOf(fn)
+        if (i >= 0) set.splice(i, 1)
+      }
+    },
+  }
+
+  return {
+    ctx,
+    config: store.config,
+    routes,
+    sections,
+    updates,
+    configured,
+    services,
+    emit,
+    current: store.current,
+    setUpdateThrows: (v) => {
+      updateThrows = v
+    },
+    listenerCount: (event) => (listeners.get(event) ?? []).length,
+  }
+}
+
+function makeRes() {
+  return {
+    status: 0,
+    body: '',
+    writeHead(status) {
+      this.status = status
+    },
+    end(body) {
+      this.body = body
+    },
+  }
+}
+
+/** GET the snapshot route and parse the JSON body. */
+async function snapshot(routes) {
+  const res = makeRes()
+  await routes.get('/dsh-skill-injector/api')({}, res)
+  assert.equal(res.status, 200)
+  return JSON.parse(res.body)
+}
+
+/** A live-agent stub with the DSH >= 0.2 history accessor. */
+function makeAgent(id, injected, events = []) {
+  return {
+    id,
+    session: { header: { cwd: 'C:/work' }, ownEvents: () => events },
+    inject: (message) => injected.push(message),
+  }
+}
+
+/** A registry that only answers a scoped read, like the real filesystem provider.
+ *  `cwd` is required too: the repo contract is `{ scope, cwd }`, so a regression
+ *  that drops the cwd must fail this suite. */
+function scopedRegistry(advertised) {
+  const scoped = (options) => options !== undefined && options.cwd === 'C:/work'
+  return {
+    snapshot: async (options) =>
+      scoped(options) ? { skills: advertised, complete: true } : { skills: [], complete: true },
+    list: async (options) => (scoped(options) ? advertised : []),
+    get: async (name, options) => (scoped(options) ? advertised.find((s) => s.name === name) : undefined),
+  }
+}
+
+// --- Contract 8: Config is volatile and names the new namespace ----------
+test('contract 8: Config exposes three volatile fields and the new entry name', () => {
+  assert.equal(pluginName, 'dsh-skill-injector')
+  assert.deepEqual(injectDeps, ['webServer', 'settings', 'skills', 'systemPrompt'])
+
+  // cordis validates a plugin Config through the Standard-Schema probe.
+  const std = Config['~standard']
+  assert.equal(typeof std?.validate, 'function')
+
+  // Every field must be volatile: `settings.update()` refuses a non-volatile
+  // field, and the Loader only commits volatile-only changes in place.
+  const resolved = std.validate({}).value
+  assert.deepEqual(resolved.mode.get(), 'each-prompt')
+  assert.deepEqual(resolved.selected.get(), [])
+  assert.deepEqual(resolved.showDock.get(), true, 'the dock line stays visible unless opted out')
+  assert.deepEqual(Config({ mode: 'start-only' }).selected.get(), [])
+  assert.ok(std.validate({ mode: 'nope' }).issues.length > 0, 'an unknown mode must be rejected')
+})
+
+// --- Contract 9: routes + GET snapshot shape -----------------------------
+test('contract 9: GET snapshot is complete JSON and concurrent reads share one pass', async () => {
+  const h = makeHarness({ mode: 'each-prompt', selected: ['ponytail'] }, scopedRegistry([PONYTAIL]))
+  apply(h.ctx, h.config)
+  assert.deepEqual(h.configured, [{ auto: false }])
+  assert.ok(h.routes.has('/dsh-skill-injector/api'))
+  assert.ok(h.routes.has('/dsh-skill-injector/api/config'))
+  assert.equal(typeof h.sections[0]?.text, 'function')
+  assert.equal(h.sections[0].name, 'dsh-skill-injector:active')
+  assert.equal(h.sections[0].order, 150)
+
+  const snap = await snapshot(h.routes)
+  assert.deepEqual(Object.keys(snap).sort(), [
+    'available',
+    'canRemove',
+    'injected',
+    'mode',
+    'ok',
+    'selected',
+    'showDock',
+    'unresolved',
+  ])
+  assert.equal(snap.ok, true)
+
+  // Identical concurrent triggers share one catalog read (in-flight memo).
+  let reads = 0
+  const scoped = (options) => options !== undefined && options.cwd === 'C:/work'
+  const counting = {
+    snapshot: async (options) => {
+      reads += 1
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return scoped(options) ? { skills: [PONYTAIL], complete: true } : { skills: [], complete: true }
+    },
+    list: async (options) => (scoped(options) ? [PONYTAIL] : []),
+    get: async (name, options) => (scoped(options) && name === 'ponytail' ? PONYTAIL : undefined),
+  }
+  const shared = makeHarness({ mode: 'each-prompt', selected: ['ponytail'] }, counting)
+  apply(shared.ctx, shared.config)
+  await shared.emit('agent/created', { agent: makeAgent('s1', []), source: 'new' })
+  await snapshot(shared.routes)
+  const before = reads
+  await Promise.all([snapshot(shared.routes), snapshot(shared.routes)])
+  assert.equal(reads - before, 1, 'two concurrent GETs must share one in-flight pass')
+})
+
+// --- Contract 10: PUT paths ----------------------------------------------
+test('contract 10: PUT validates, persists to the entry id, and always answers JSON', async () => {
+  const h = makeHarness({ mode: 'each-prompt', selected: [] }, scopedRegistry([PONYTAIL]), {
+    loader: { entries: () => [{ options: { id: 'renamed-entry', name: 'dsh-skill-injector' } }] },
+  })
+  apply(h.ctx, h.config)
+
+  const put = async (body) => {
+    const res = makeRes()
+    await h.routes.get('/dsh-skill-injector/api/config')([body], res)
+    return { status: res.status, snap: JSON.parse(res.body) }
+  }
+
+  const ok = await put(JSON.stringify({ mode: 'start-only', selected: ['ponytail'] }))
+  assert.equal(ok.status, 200)
+  assert.equal(ok.snap.ok, true)
+  assert.deepEqual(ok.snap.selected, ['ponytail'])
+  assert.equal(ok.snap.showDock, true, 'a body without showDock keeps the default')
+  assert.deepEqual(h.updates, [['renamed-entry', { mode: 'start-only', selected: ['ponytail'], showDock: true }]])
+
+  const malformed = await put('{not json')
+  assert.equal(malformed.status, 400)
+  assert.equal(malformed.snap.ok, false)
+
+  const invalid = await put(JSON.stringify({ mode: 'nope', selected: [] }))
+  assert.equal(invalid.status, 400)
+  assert.equal(invalid.snap.ok, false)
+
+  h.setUpdateThrows(true)
+  const exploded = await put(JSON.stringify({ mode: 'each-prompt', selected: ['ponytail'] }))
+  assert.equal(exploded.status, 500)
+  assert.equal(exploded.snap.ok, false)
+  assert.match(exploded.snap.error, /exploded/)
+})
+
+// --- Contract 11: last-good body vs unknown ------------------------------
+test('contract 11: a transient failure keeps the last-good body; only unknown drops it', async () => {
+  let advertised = [PONYTAIL]
+  let complete = true
+  let getThrows = false
+  let snapshotThrows = false
+  const scoped = (options) => options !== undefined && options.cwd === 'C:/work'
+  const skills = {
+    snapshot: async (options) => {
+      if (snapshotThrows) throw new Error('registry exploded')
+      return scoped(options) ? { skills: advertised, complete } : { skills: [], complete: true }
+    },
+    list: async (options) => (scoped(options) ? advertised : []),
+    get: async (name, options) => {
+      if (!scoped(options) || name !== 'ponytail') return undefined
+      if (getThrows) throw new Error('EACCES')
+      return PONYTAIL
+    },
+  }
+  const h = makeHarness({ mode: 'each-prompt', selected: ['ponytail', 'llmtrim'] }, skills)
+  apply(h.ctx, h.config)
+  const section = () => h.sections[0].text()
+  assert.equal(section(), '')
+
+  // Scope arrives, then a clean pass renders the body into the section.
+  await h.emit('agent/created', { agent: makeAgent('s1', []), source: 'new' })
+  await snapshot(h.routes)
+  assert.match(section(), /BODY-PONYTAIL/)
+
+  // A failing body load is transient: reported per skill, still injected.
+  getThrows = true
+  const failed = await snapshot(h.routes)
+  assert.deepEqual(failed.unresolved, [
+    { name: 'ponytail', state: 'load-failed', reason: 'EACCES', cached: true },
+    { name: 'llmtrim', state: 'unknown', reason: 'not in the skill catalog', cached: false },
+  ])
+  assert.match(section(), /BODY-PONYTAIL/)
+
+  // A failed catalog read is unavailable with the thrown message, still transient.
+  snapshotThrows = true
+  const errored = await snapshot(h.routes)
+  assert.deepEqual(errored.unresolved.map((u) => [u.name, u.state, u.reason]), [
+    ['ponytail', 'unavailable', 'registry exploded'],
+    ['llmtrim', 'unavailable', 'registry exploded'],
+  ])
+  assert.match(section(), /BODY-PONYTAIL/)
+  snapshotThrows = false
+
+  // Incomplete discovery is transient too, and must never read as a deletion.
+  getThrows = false
+  advertised = []
+  complete = false
+  const partial = await snapshot(h.routes)
+  assert.deepEqual(partial.unresolved.map((u) => [u.name, u.state, u.reason]), [
+    ['ponytail', 'unavailable', 'provider discovery incomplete'],
+    ['llmtrim', 'unavailable', 'provider discovery incomplete'],
+  ])
+  assert.match(section(), /BODY-PONYTAIL/)
+
+  // Only a complete, scoped read that no longer advertises the name drops it.
+  complete = true
+  const gone = await snapshot(h.routes)
+  assert.equal(gone.unresolved[0].state, 'unknown')
+  assert.equal(section(), '')
+
+  // The section escapes braces while a stamped message stays raw.
+  const braced = { ...PONYTAIL, content: 'uses {{model}} verbatim' }
+  const eachPrompt = makeHarness({ mode: 'each-prompt', selected: ['ponytail'] }, scopedRegistry([braced]))
+  apply(eachPrompt.ctx, eachPrompt.config)
+  await eachPrompt.emit('agent/created', { agent: makeAgent('b1', []), source: 'new' })
+  await snapshot(eachPrompt.routes)
+  assert.match(eachPrompt.sections[0].text(), /&#123;&#123;model}}/)
+  assert.ok(!eachPrompt.sections[0].text().includes('{{model}}'))
+
+  const startOnly = makeHarness({ mode: 'start-only', selected: ['ponytail'] }, scopedRegistry([braced]))
+  apply(startOnly.ctx, startOnly.config)
+  const injected = []
+  await startOnly.emit('agent/created', { agent: makeAgent('b2', injected), source: 'new' })
+  assert.equal(injected.length, 1)
+  assert.match(injected[0].content[0].text, /\{\{model\}\}/)
+})
+
+// --- Contract 12: two-pass stamp + resume dedupe -------------------------
+test('contract 12: start-only stamps a cold cache in two passes and never doubles on resume', async () => {
+  const h = makeHarness({ mode: 'start-only', selected: ['ponytail', 'llmtrim'] }, scopedRegistry([PONYTAIL, HIDDEN]))
+  apply(h.ctx, h.config)
+
+  // A session starts with a cold cache: pass 1 stamps nothing, pass 2 must stamp.
+  const injected = []
+  await h.emit('agent/created', { agent: makeAgent('session-1', injected), source: 'new' })
+  assert.equal(injected.length, 1)
+  assert.equal(injected[0].source.name, 'ponytail')
+
+  // Re-firing the same session must not double-stamp.
+  await h.emit('agent/created', { agent: makeAgent('session-1', injected), source: 'resume' })
+  await snapshot(h.routes)
+  assert.equal(injected.length, 1)
+
+  // A different session whose log already carries the stamp must not stamp again.
+  const second = []
+  await h.emit('agent/created', {
+    agent: makeAgent('session-2', second, [
+      {
+        type: 'user/message',
+        data: { source: { kind: 'skill-invocation', name: 'ponytail', form: 'instructions' } },
+      },
+    ]),
+    source: 'new',
+  })
+  await snapshot(h.routes)
+  assert.equal(second.length, 0)
+
+  // The host never rewrites the stored selection; only the PUT route may.
+  assert.equal(h.updates.length, 0)
+})
+
+// --- Contract 13: canRemove gates on a scoped resolve --------------------
+test('contract 13: canRemove stays false until a scoped resolve has run', async () => {
+  const h = makeHarness({ mode: 'each-prompt', selected: ['ponytail'] }, scopedRegistry([PONYTAIL]))
+  apply(h.ctx, h.config)
+
+  const boot = await snapshot(h.routes)
+  assert.equal(boot.canRemove, false)
+  assert.deepEqual(boot.available, [])
+  assert.deepEqual(boot.unresolved, [
+    { name: 'ponytail', state: 'no-scope', reason: 'waiting for a session to establish scope', cached: false },
+  ])
+
+  await h.emit('agent/created', { agent: makeAgent('s1', []), source: 'new' })
+  const scoped = await snapshot(h.routes)
+  assert.equal(scoped.canRemove, true)
+  assert.deepEqual(scoped.available, [{ name: 'ponytail', description: 'lazy senior dev' }])
+  assert.deepEqual(scoped.unresolved, [])
+})
+
+// --- Contract 14: disposal clears the scope, registry recovers one ------
+test('contract 14: a live agent supplies the scope after re-apply; disposal clears it', async () => {
+  const skills = scopedRegistry([PONYTAIL])
+  // No `agent/created` ever fired for this instance: exactly the state a reload
+  // leaves behind (the Loader re-applies the plugin on a non-volatile change).
+  const agent = makeAgent('survivor', [])
+  let live = [agent]
+  const h = makeHarness({ mode: 'each-prompt', selected: ['ponytail'] }, skills, { agents: { list: () => live } })
+  apply(h.ctx, h.config)
+
+  const recovered = await snapshot(h.routes)
+  assert.equal(recovered.canRemove, true)
+  assert.deepEqual(recovered.available, [{ name: 'ponytail', description: 'lazy senior dev' }])
+  assert.deepEqual(recovered.unresolved, [])
+
+  // A disposed agent must stop being the scope: the plugin reverts to the
+  // pre-scope posture instead of resolving against a dead scope.
+  live = []
+  await h.emit('agent/disposed', { agent })
+  const disposed = await snapshot(h.routes)
+  assert.deepEqual(disposed.unresolved, [
+    { name: 'ponytail', state: 'no-scope', reason: 'waiting for a session to establish scope', cached: true },
+  ])
+})
+
+// --- Contract 15: per-agent stamp ledger is bounded ----------------------
+test('contract 15: the per-agent stamp ledger caps at 200 and evicts the oldest', async () => {
+  const h = makeHarness({ mode: 'start-only', selected: ['ponytail'] }, scopedRegistry([PONYTAIL]))
+  apply(h.ctx, h.config)
+
+  for (let i = 0; i < 201; i += 1) {
+    await h.emit('agent/created', { agent: makeAgent('agent-' + i, []), source: 'new' })
+  }
+
+  // The first agent's ledger entry was evicted, so a resume of its empty log
+  // stamps again; the most recent agent is still recorded and does not.
+  const first = []
+  await h.emit('agent/created', { agent: makeAgent('agent-0', first), source: 'resume' })
+  assert.equal(first.length, 1, 'the evicted oldest agent stamps again')
+
+  const last = []
+  await h.emit('agent/created', { agent: makeAgent('agent-200', last), source: 'resume' })
+  assert.equal(last.length, 0, 'a recently stamped agent is remembered')
+})
+
+// --- Contract 16: volatile save re-resolves without a reload -------------
+test('contract 16: loader/volatile-update re-resolves the selection in place', async () => {
+  let reads = 0
+  const scoped = (options) => options !== undefined && options.cwd === 'C:/work'
+  const skills = {
+    snapshot: async (options) => {
+      reads += 1
+      return scoped(options) ? { skills: [PONYTAIL], complete: true } : { skills: [], complete: true }
+    },
+    list: async (options) => (scoped(options) ? [PONYTAIL] : []),
+    get: async (name, options) => (scoped(options) && name === 'ponytail' ? PONYTAIL : undefined),
+  }
+  const h = makeHarness({ mode: 'each-prompt', selected: [] }, skills)
+  apply(h.ctx, h.config)
+  await h.emit('agent/created', { agent: makeAgent('s1', []), source: 'new' })
+  await snapshot(h.routes)
+  const section = () => h.sections[0].text()
+  assert.equal(section(), '')
+
+  // A Save touches only volatile fields: the Loader commits in place and emits.
+  const before = reads
+  const put = makeRes()
+  await h.routes.get('/dsh-skill-injector/api/config')(
+    [JSON.stringify({ mode: 'each-prompt', selected: ['ponytail'] })],
+    put,
+  )
+  assert.equal(put.status, 200)
+  assert.deepEqual(JSON.parse(put.body).selected, ['ponytail'])
+
+  // The same instance now serves the new selection: no re-apply, no lost scope.
+  const after = await snapshot(h.routes)
+  assert.deepEqual(after.selected, ['ponytail'])
+  assert.match(section(), /BODY-PONYTAIL/)
+  assert.ok(reads > before, 'the save triggered at least one fresh resolve')
+
+  // showDock is reported live and can be opted out without a reload.
+  const off = makeRes()
+  await h.routes.get('/dsh-skill-injector/api/config')(
+    [JSON.stringify({ mode: 'each-prompt', selected: ['ponytail'], showDock: false })],
+    off,
+  )
+  assert.equal(off.status, 200)
+  assert.equal(JSON.parse(off.body).showDock, false)
+  assert.equal((await snapshot(h.routes)).showDock, false)
+})
