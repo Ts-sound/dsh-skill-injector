@@ -20,7 +20,7 @@ const clientBundle = {
   format: 'cjs' as const,
   platform: 'browser' as const,
   dts: false,
-  sourcemap: true,
+  sourcemap: false,
   clean: false,
   external: CLIENT_EXTERNALS,
   define: {

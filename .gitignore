@@ -39,7 +39,7 @@ next-env.d.ts
 
 # dsh-skill-injector build output is committed: installs run against lib/
 # without a build step, so lib/index.js, lib/helpers.js, lib/client.js and
-# lib/client.js.map are tracked on purpose.
+# are tracked on purpose. Source maps are not built.
 node_modules/
 
 # local pnpm store/state (sandboxed sessions redirect the user profile here)

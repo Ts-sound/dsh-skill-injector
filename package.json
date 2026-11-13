@@ -14,7 +14,6 @@
     "lib/index.js",
     "lib/helpers.js",
     "lib/client.js",
-    "lib/client.js.map",
     "cordis.patch.yml",
     "src",
     "README.md",
@@ -49,8 +48,12 @@
     "@deepseek-ai/cordis": "^4.0.5"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": true },
-    "@deepseek-ai/cordis": { "optional": true }
+    "react": {
+      "optional": true
+    },
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.5"
